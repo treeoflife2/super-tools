@@ -93,12 +93,83 @@ impl Default for TerminalState {
 
 fn get_context_prompt(purpose: &str) -> String {
     match purpose {
-        "Brainstorming" => "This is a brainstorming session. Help me explore ideas, ask clarifying questions, and think through approaches before committing to implementation.".to_string(),
-        "Development" => "This is a development session. Help me write, refactor, and improve code. Focus on implementation quality and best practices.".to_string(),
-        "Code Review" => "This is a code review session. Help me review code for bugs, improvements, and best practices. Be critical and thorough.".to_string(),
-        "Debugging" => "This is a debugging session. Help me systematically identify and fix bugs. Ask about symptoms, reproduce issues, and trace root causes.".to_string(),
+        "Brainstorming" => r#"# Session: Brainstorming
+
+You are in a brainstorming session. Your role:
+
+- Explore multiple approaches before settling on one
+- Ask clarifying questions to understand the full picture
+- Think out loud — share tradeoffs, risks, and alternatives
+- Do NOT write implementation code unless explicitly asked
+- Focus on architecture, design decisions, and high-level strategy
+- Challenge assumptions — push back if something seems off
+- Summarize options with pros/cons when presenting choices"#.to_string(),
+
+        "Development" => r#"# Session: Development
+
+You are in a development session. Your role:
+
+- Write clean, working code — prioritize correctness over cleverness
+- Follow existing patterns and conventions in the codebase
+- Make small, focused changes — one thing at a time
+- Run tests and verify changes work before moving on
+- Keep commits logical and atomic
+- If requirements are unclear, ask before guessing
+- Prefer editing existing files over creating new ones"#.to_string(),
+
+        "Code Review" => r#"# Session: Code Review
+
+You are in a code review session. Your role:
+
+- Review recent changes with a critical eye
+- Check for: bugs, security issues, performance problems, edge cases
+- Reference specific files and line numbers
+- Suggest concrete improvements, not vague advice
+- Flag anything that could break in production
+- Check error handling — are failures handled gracefully?
+- Look for missing tests or untested paths
+- Be direct — don't sugarcoat issues"#.to_string(),
+
+        "Debugging" => r#"# Session: Debugging
+
+You are in a debugging session. Your role:
+
+- Reproduce the issue first — confirm the symptoms
+- Form a hypothesis, then verify it with evidence (logs, output, traces)
+- Do NOT guess fixes — trace the root cause methodically
+- Check recent changes that might have introduced the bug
+- Use binary search (git bisect, selective commenting) to isolate
+- Once found, explain the root cause before proposing a fix
+- After fixing, verify the original issue is resolved
+- Check for related bugs that might have the same root cause"#.to_string(),
+
         _ => String::new(),
     }
+}
+
+/// Write a CLAUDE.md file in the session's working directory
+/// Claude Code reads this automatically on every turn
+fn inject_claude_md(working_dir: &str, purpose: &str, title: &str) -> Result<(), String> {
+    let prompt = get_context_prompt(purpose);
+    if prompt.is_empty() { return Ok(()); }
+
+    let claude_dir = PathBuf::from(working_dir).join(".claude");
+    let _ = std::fs::create_dir_all(&claude_dir);
+    let md_path = claude_dir.join("CLAUDE.md");
+
+    // Don't overwrite if it already exists (user may have customized it)
+    if md_path.exists() {
+        let existing = std::fs::read_to_string(&md_path).unwrap_or_default();
+        if existing.contains("# Session:") {
+            // Our file — safe to update
+            std::fs::write(&md_path, &prompt).map_err(|e| e.to_string())?;
+        }
+        // User's custom file — leave it alone
+    } else {
+        std::fs::write(&md_path, &prompt).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -707,7 +778,18 @@ fn spawn_terminal(
         }
     });
 
-    let _ = context_prompt;
+    // Inject CLAUDE.md if this is a new session (no session_id = first run)
+    if session_id.is_none() {
+        if let Some(ref prompt) = context_prompt {
+            if !prompt.is_empty() {
+                // prompt format: "purpose|title" — extract and inject CLAUDE.md
+                let parts: Vec<&str> = prompt.splitn(2, '|').collect();
+                if parts.len() == 2 {
+                    let _ = inject_claude_md(&project_path, parts[0], parts[1]);
+                }
+            }
+        }
+    }
 
     let entry = TerminalEntry {
         master: pty_pair.master,

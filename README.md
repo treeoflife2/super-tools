@@ -5,7 +5,7 @@
 <h1 align="center">Clauge</h1>
 
 <p align="center">
-  Session manager for Claude Code
+  A lightweight, native macOS app for running multiple Claude Code sessions side by side — with purpose-driven workflows, embedded terminal, and automatic session isolation.
 </p>
 
 <p align="center">
@@ -23,18 +23,31 @@
 
 ---
 
-## Features
+## Why Clauge?
 
-- **Session profiles** with title and purpose — Brainstorming, Development, Code Review, Debugging
-- **Embedded terminal** (xterm.js + PTY) — no external terminal window needed
-- **Multi-session** — switch between active sessions without re-spawning
-- **Project grouping** with expand/collapse
-- **Auto-discovery** of existing Claude Code sessions from `~/.claude/projects/`
-- **Usage tracking** — session and weekly limits shown in the menu bar
-- **macOS native** — vibrancy, hidden titlebar, system tray
-- **Dark & light themes** with accent color picker
-- **Keyboard shortcuts** — `Cmd+N`, `Cmd+1-9`
-- **Context prompts** — auto-injected based on session purpose
+Claude Code's `--resume` expects you to remember UUID session IDs. When you're juggling brainstorming, development, and code review across multiple projects, that falls apart fast.
+
+Clauge gives every session a name, a purpose, and its own terminal — all inside a single native app that weighs under 10MB and barely touches your CPU.
+
+## What it does
+
+### Purpose-driven sessions
+Pick a purpose when you create a session — **Brainstorming**, **Development**, **Code Review**, or **Debugging**. Clauge writes a `CLAUDE.md` file with tailored instructions so Claude stays in the right mindset throughout the session. Not a one-time prompt — it persists on every turn.
+
+### Run sessions in parallel
+Open multiple sessions for the same project without worrying about file conflicts. Clauge automatically creates **git worktrees** to isolate each session. First session runs in your project directory, second gets its own branch and working copy.
+
+### Embedded terminal
+Full interactive terminal (xterm.js + PTY) built into the app. Colors, scrollback, resize — everything works. Switch between sessions instantly without re-spawning Claude.
+
+### Lightweight and native
+Built with **Rust + Tauri**. ~10MB app size. Uses macOS native APIs — translucent vibrancy sidebar, system tray with usage stats, hidden titlebar with traffic lights. Runs with minimal memory and CPU compared to Electron alternatives.
+
+### Usage tracking
+See your Claude session and weekly usage limits right in the menu bar. Pulls real data from the Claude API — no guessing how much headroom you have left.
+
+### Organize everything
+Sessions grouped by project with expand/collapse. Auto-discovers existing Claude Code sessions from `~/.claude/projects/`. Dark and light themes with accent colors. Keyboard shortcuts for everything.
 
 ## Download
 
@@ -53,12 +66,13 @@ bun run tauri dev
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | SvelteKit + Svelte 5 |
-| Backend | Rust + Tauri v2 |
-| Terminal | xterm.js + portable-pty |
-| Usage API | Swift (NSURLSession) |
+| | |
+|---|---|
+| **Frontend** | SvelteKit, Svelte 5 |
+| **Backend** | Rust, Tauri v2 |
+| **Terminal** | xterm.js, portable-pty |
+| **Session isolation** | git worktrees |
+| **Usage API** | Swift (NSURLSession) |
 
 ## Contributing
 

@@ -244,7 +244,7 @@
         const tid = await invoke("spawn_terminal", {
           sessionId: profile.claudeSessionId || null,
           projectPath: spawnPath,
-          contextPrompt: profile.contextPrompt,
+          contextPrompt: `${profile.purpose}|${profile.title}`,
           onOutput: onOutput,
         });
         entry.terminalId = tid;
