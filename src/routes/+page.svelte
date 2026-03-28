@@ -203,42 +203,39 @@
       try {
         await invoke("update_last_used", { id: profile.id });
 
-        // Determine working directory:
-        // - Resuming a session: always use original project path (Claude stores sessions by project root)
-        // - New session with worktree: use worktree path for file isolation
-        // - New session without worktree: use original project path
-        let spawnPath = profile.claudeSessionId
-          ? profile.projectPath  // resuming — Claude needs the original project path
-          : (profile.worktreePath || profile.projectPath);
+        // Every session gets its own worktree — full isolation
+        let spawnPath = profile.worktreePath || profile.projectPath;
 
-        if (!profile.worktreePath) {
-          // Check if another session for this project already has a terminal running
-          const otherActive = profiles.some(p =>
-            p.id !== profile.id &&
-            p.projectPath === profile.projectPath &&
-            terminalMap.has(p.id) &&
-            terminalMap.get(p.id).terminalId
-          );
-
-          if (otherActive) {
-            // Need worktree isolation — check if it's a git repo first
-            try {
-              const isGit = await invoke("is_git_repo", { path: profile.projectPath });
-              if (isGit) {
-                const branchName = `clauge/${profile.purpose.toLowerCase().replace(/\s+/g, '-')}-${profile.title.toLowerCase().replace(/\s+/g, '-')}`;
-                const worktreePath = await invoke("create_worktree", { projectPath: profile.projectPath, branchName });
-                spawnPath = worktreePath;
-                await invoke("update_profile_worktree", { id: profile.id, worktreePath, worktreeBranch: branchName });
-                profile.worktreePath = worktreePath;
-                profile.worktreeBranch = branchName;
-                await loadProfiles();
-              }
-            } catch(e) {
-              console.warn("Worktree creation failed, using original path:", e);
+        if (!profile.worktreePath && !profile.claudeSessionId) {
+          try {
+            const isGit = await invoke("is_git_repo", { path: profile.projectPath });
+            if (isGit) {
+              const branchName = `clauge/${profile.purpose.toLowerCase().replace(/\s+/g, '-')}-${profile.title.toLowerCase().replace(/\s+/g, '-')}`;
+              const worktreePath = await invoke("create_worktree", { projectPath: profile.projectPath, branchName });
+              spawnPath = worktreePath;
+              await invoke("update_profile_worktree", { id: profile.id, worktreePath, worktreeBranch: branchName });
+              profile.worktreePath = worktreePath;
+              profile.worktreeBranch = branchName;
+              await loadProfiles();
             }
+          } catch(e) {
+            console.warn("Worktree creation failed, using original path:", e);
           }
         }
 
+        // Get existing session IDs BEFORE spawning
+        let existingSessionIds = [];
+        if (!profile.claudeSessionId) {
+          try {
+            const existing = await invoke("discover_sessions", { projectPath: profile.projectPath });
+            existingSessionIds = existing.map(s => s.sessionId);
+          } catch(e) {}
+        }
+
+        // Flatten prompt to single line for shell compatibility
+        const purposePrompt = (getPurposePrompt(profile.purpose) || '').replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+
+        let outputReceived = false;
         const onOutput = new Channel();
         onOutput.onmessage = (payload) => {
           if (entry.term) {
@@ -249,46 +246,34 @@
               entry.term.write(bytes);
             } catch(e) {}
           }
+          // Capture session ID on first output — session file exists by now
+          if (!outputReceived && !profile.claudeSessionId && existingSessionIds.length >= 0) {
+            outputReceived = true;
+            setTimeout(async () => {
+              try {
+                const allSessions = await invoke("discover_sessions", { projectPath: profile.projectPath });
+                const newSession = allSessions.find(s => !existingSessionIds.includes(s.sessionId));
+                if (newSession) {
+                  await invoke("update_session_id", { id: profile.id, claudeSessionId: newSession.sessionId });
+                  profile.claudeSessionId = newSession.sessionId;
+                  await loadProfiles();
+                }
+              } catch(e) {}
+            }, 2000);
+          }
         };
         entry.channel = onOutput;
-
-        // Get existing session IDs BEFORE spawning so we can detect the new one
-        let existingSessionIds = [];
-        if (!profile.claudeSessionId) {
-          try {
-            const existing = await invoke("discover_sessions", { projectPath: profile.projectPath });
-            existingSessionIds = existing.map(s => s.sessionId);
-          } catch(e) {}
-        }
-
-        // Pass purpose prompt — gets injected via --append-system-prompt (persists every turn)
-        const purposePrompt = getPurposePrompt(profile.purpose);
 
         const tid = await invoke("spawn_terminal", {
           sessionId: profile.claudeSessionId || null,
           projectPath: spawnPath,
-          contextPrompt: purposePrompt,
+          contextPrompt: purposePrompt || null,
           onOutput: onOutput,
         });
         entry.terminalId = tid;
         currentTerminalId = tid;
         statusMsg = profile.title;
         showTermEntry(entry);
-
-        if (!profile.claudeSessionId) {
-          // Capture the NEW session ID (not an old one)
-          setTimeout(async () => {
-            try {
-              const allSessions = await invoke("discover_sessions", { projectPath: profile.projectPath });
-              const newSession = allSessions.find(s => !existingSessionIds.includes(s.sessionId));
-              if (newSession) {
-                await invoke("update_session_id", { id: profile.id, claudeSessionId: newSession.sessionId });
-                profile.claudeSessionId = newSession.sessionId;
-                await loadProfiles();
-              }
-            } catch(e) {}
-          }, 5000);
-        }
 
         entry.fitAddon.fit();
         const dims = entry.fitAddon.proposeDimensions();
@@ -329,17 +314,25 @@
 
   async function confirmDelete() {
     if (!deleteConfirm) return;
-    const deletedId = deleteConfirm.id;
+    const deletedProfile = { ...deleteConfirm };
+    const deletedId = deletedProfile.id;
+
+    // Clean up worktree
+    if (deletedProfile.worktreePath && deletedProfile.projectPath) {
+      try { await invoke("remove_worktree", { projectPath: deletedProfile.projectPath, worktreePath: deletedProfile.worktreePath }); } catch(e) {}
+    }
+
     await invoke("delete_profile", { id: deletedId });
 
-    // If deleting the active session, clean up terminal and show empty state
+    // Clean up terminal
+    const entry = terminalMap.get(deletedId);
+    if (entry) {
+      entry.container.style.display = "none";
+      if (entry.term) entry.term.dispose();
+      terminalMap.delete(deletedId);
+    }
+
     if (activeProfile?.id === deletedId) {
-      const entry = terminalMap.get(deletedId);
-      if (entry) {
-        entry.container.style.display = "none";
-        if (entry.term) entry.term.dispose();
-        terminalMap.delete(deletedId);
-      }
       activeProfile = null;
       activeTermEntry = null;
       currentTerminalId = null;
@@ -532,11 +525,12 @@ Anti-patterns to avoid:
       "PR Review": `You are in a PR review session. Follow these rules strictly:
 
 Your process:
-1. Ask which branch or PR to review
-2. Run git diff main...<branch> to see all changes
-3. Review every changed file — do not skip any
-4. Summarize: what the PR does, what's good, what needs fixing
-5. Give a clear verdict: approve, request changes, or needs discussion
+1. Ask which branch to review AND which base branch to compare against (do not assume main)
+2. Run git diff <base>...<branch> to see only the incoming changes
+3. Review ONLY the changes in the diff — do not review unrelated code
+4. Review every changed file — do not skip any
+5. Summarize: what the PR does, what's good, what needs fixing
+6. Give a clear verdict: approve, request changes, or needs discussion
 
 What to check:
 - Does the PR do what it claims?
