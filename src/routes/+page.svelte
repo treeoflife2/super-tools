@@ -8,21 +8,14 @@
   import { notifications } from "$lib/stores/notifications.svelte";
   import { updater } from "$lib/stores/updater.svelte";
   import { pluginsStore } from "$lib/stores/plugins.svelte";
+  import { contextsStore } from "$lib/stores/contexts.svelte";
 
   let profiles = $state([]);
   let activeProfile = $state(null);
   let showModal = $state(false);
   let showSettings = $state(false);
   let settingsTab = $state('settings');
-  // Context manager
-  let contextSnippets = $state([]);
-  let contextEditing = $state(null); // { name, content } or null
-  let contextNewName = $state('');
-  let contextNewContent = $state('');
-  let modalContexts = $state([]); // selected context names for new session
-  let showContextPicker = $state(false); // for running sessions
-  let modalContextEnabled = $state(false);
-  let showContextDropdown = $state(false);
+  // Context manager — state lives in contextsStore
   let currentTerminalId = null;
   let terminalEl;
   let statusMsg = $state("Ready");
@@ -595,7 +588,7 @@
         customPrompt: modalPurpose === 'Custom' && modalCustomPrompt.trim() ? modalCustomPrompt.trim() : null,
         gitName: modalGitEnabled && modalGitName.trim() ? modalGitName.trim() : null,
         gitEmail: modalGitEnabled && modalGitEmail.trim() ? modalGitEmail.trim() : null,
-        contexts: modalContexts.length > 0 ? modalContexts : null,
+        contexts: contextsStore.modalContexts.length > 0 ? contextsStore.modalContexts : null,
       });
       // Link existing session if selected (Custom purpose only)
       if (modalSelectedSession) {
@@ -605,7 +598,7 @@
       showModal = false;
       modalPath = ""; modalTitle = ""; modalPurpose = ""; modalSkipPermissions = false;
       modalExistingSessions = []; modalSelectedSession = ""; modalCustomPrompt = "";
-      modalGitEnabled = false; modalGitName = ""; modalGitEmail = ""; modalContexts = []; modalContextEnabled = false; showContextDropdown = false;
+      modalGitEnabled = false; modalGitName = ""; modalGitEmail = ""; contextsStore.modalContexts = []; contextsStore.modalContextEnabled = false; contextsStore.showContextDropdown = false;
       await loadProfiles();
       await selectProfile(profile);
     } catch (e) { statusMsg = "Create failed: " + e; }
@@ -919,7 +912,7 @@
     }
     if (e.metaKey && e.key === 'b') { e.preventDefault(); toggleSidebar(); }
     if (e.metaKey && e.key === 'l') { e.preventDefault(); toggleShell(); }
-    if (e.key === 'Escape') { showModal = false; showSettings = false; modalExistingSessions = []; modalSelectedSession = ""; modalCustomPrompt = ""; modalGitEnabled = false; modalGitName = ""; modalGitEmail = ""; modalContexts = []; modalContextEnabled = false; showContextDropdown = false; }
+    if (e.key === 'Escape') { showModal = false; showSettings = false; modalExistingSessions = []; modalSelectedSession = ""; modalCustomPrompt = ""; modalGitEnabled = false; modalGitName = ""; modalGitEmail = ""; contextsStore.modalContexts = []; contextsStore.modalContextEnabled = false; contextsStore.showContextDropdown = false; }
   }
 
   function handleWindowResize() {
@@ -1067,33 +1060,7 @@ Anti-patterns to avoid:
     }
   }
 
-  async function loadContextSnippets() {
-    try { contextSnippets = await invoke("get_context_snippets"); } catch(_) { contextSnippets = []; }
-  }
-  async function saveContextSnippet() {
-    if (!contextNewName.trim() || !contextNewContent.trim()) return;
-    try {
-      await invoke("save_context_snippet", { name: contextNewName.trim(), content: contextNewContent.trim() });
-      contextNewName = ''; contextNewContent = '';
-      contextEditing = null;
-      await loadContextSnippets();
-    } catch(_) {}
-  }
-  async function deleteContextSnippet(name) {
-    try { await invoke("delete_context_snippet", { name }); await loadContextSnippets(); } catch(_) {}
-  }
-  async function attachContextsToSession(profileId, projectPath, contextNames) {
-    try {
-      await invoke("update_session_contexts", { id: profileId, contexts: contextNames });
-      await invoke("inject_session_context", { projectPath, contextNames });
-    } catch(e) { console.error('Context inject failed:', e); }
-  }
-  async function detachContextsFromSession(profileId, projectPath) {
-    try {
-      await invoke("update_session_contexts", { id: profileId, contexts: [] });
-      await invoke("remove_injected_context", { projectPath });
-    } catch(_) {}
-  }
+
 
   async function loadUsageLimits() {
     usageError = '';
@@ -1176,7 +1143,7 @@ Anti-patterns to avoid:
   });
 </script>
 
-<svelte:window onkeydown={handleGlobalKeydown} onresize={handleWindowResize} onclick={() => { menuProfile = null; profileMenuOpen = false; gitPanelOpen = false; showContextDropdown = false; }} oncontextmenu={(e) => { if (!import.meta.env.DEV) e.preventDefault(); }} />
+<svelte:window onkeydown={handleGlobalKeydown} onresize={handleWindowResize} onclick={() => { menuProfile = null; profileMenuOpen = false; gitPanelOpen = false; contextsStore.showContextDropdown = false; }} oncontextmenu={(e) => { if (!import.meta.env.DEV) e.preventDefault(); }} />
 
 <div class="app-wrapper">
 <div class="app">
@@ -1186,7 +1153,7 @@ Anti-patterns to avoid:
     <div class="sidebar-header">
       <span class="app-title">Clauge {#if claudePlan}<span class="plan-badge">{claudePlan}</span>{/if}</span>
       <div class="header-actions">
-        <button class="new-btn" onclick={() => { showModal = true; loadContextSnippets(); }} title="New Session (Cmd+N)">+</button>
+        <button class="new-btn" onclick={() => { showModal = true; contextsStore.loadContextSnippets(); }} title="New Session (Cmd+N)">+</button>
       </div>
     </div>
     <div class="sidebar-content">
@@ -1227,7 +1194,7 @@ Anti-patterns to avoid:
                     {#if menuProfile?.id === profile.id}
                       <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
                       <div class="session-menu" onclick={(e) => e.stopPropagation()}>
-                        <button class="session-menu-item" onclick={() => { menuProfile = null; showContextPicker = profile; loadContextSnippets(); }}>
+                        <button class="session-menu-item" onclick={() => { menuProfile = null; contextsStore.showContextPicker = profile; contextsStore.loadContextSnippets(); }}>
                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                           Add Contexts
                         </button>
@@ -1585,34 +1552,34 @@ Anti-patterns to avoid:
     <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
     <div class="toggle-row">
       <span class="toggle-label">Attach Contexts</span>
-      <button class="toggle-switch" class:on={modalContextEnabled} onclick={() => modalContextEnabled = !modalContextEnabled}>
+      <button class="toggle-switch" class:on={contextsStore.modalContextEnabled} onclick={() => contextsStore.modalContextEnabled = !contextsStore.modalContextEnabled}>
         <span class="toggle-knob"></span>
       </button>
     </div>
-    {#if modalContextEnabled}
+    {#if contextsStore.modalContextEnabled}
       <div class="advanced-section">
-        {#if modalContexts.length > 0}
+        {#if contextsStore.modalContexts.length > 0}
           <div class="ctx-attached-chips">
-            {#each modalContexts as name}
+            {#each contextsStore.modalContexts as name}
               <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
               <span class="ctx-attached-chip">
                 {name}
-                <span class="ctx-chip-remove" onclick={() => { modalContexts = modalContexts.filter(c => c !== name); }}>×</span>
+                <span class="ctx-chip-remove" onclick={() => { contextsStore.modalContexts = contextsStore.modalContexts.filter(c => c !== name); }}>×</span>
               </span>
             {/each}
           </div>
         {/if}
         <div class="ctx-add-wrap">
           <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-          <button class="ctx-add-btn" onclick={(e) => { e.stopPropagation(); showContextDropdown = !showContextDropdown; }}>
+          <button class="ctx-add-btn" onclick={(e) => { e.stopPropagation(); contextsStore.showContextDropdown = !contextsStore.showContextDropdown; }}>
             <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M7.75 2a.75.75 0 01.75.75V7h4.25a.75.75 0 010 1.5H8.5v4.25a.75.75 0 01-1.5 0V8.5H2.75a.75.75 0 010-1.5H7V2.75A.75.75 0 017.75 2z"/></svg>
             Add
           </button>
-          {#if showContextDropdown}
+          {#if contextsStore.showContextDropdown}
             <div class="ctx-dropdown">
-              {#each contextSnippets.filter(c => !modalContexts.includes(c.name)) as ctx}
+              {#each contextsStore.contextSnippets.filter(c => !contextsStore.modalContexts.includes(c.name)) as ctx}
                 <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-                <div class="ctx-dropdown-item" onclick={() => { modalContexts = [...modalContexts, ctx.name]; showContextDropdown = false; }}>
+                <div class="ctx-dropdown-item" onclick={() => { contextsStore.modalContexts = [...contextsStore.modalContexts, ctx.name]; contextsStore.showContextDropdown = false; }}>
                   <span class="ctx-dropdown-name">{ctx.name}</span>
                   <span class="ctx-dropdown-preview">{ctx.preview}</span>
                 </div>
@@ -1625,7 +1592,7 @@ Anti-patterns to avoid:
       </div>
     {/if}
     <div class="modal-actions">
-      <button onclick={() => { showModal = false; modalExistingSessions = []; modalSelectedSession = ""; modalCustomPrompt = ""; modalGitEnabled = false; modalGitName = ""; modalGitEmail = ""; modalContexts = []; modalContextEnabled = false; showContextDropdown = false; }}>Cancel</button>
+      <button onclick={() => { showModal = false; modalExistingSessions = []; modalSelectedSession = ""; modalCustomPrompt = ""; modalGitEnabled = false; modalGitName = ""; modalGitEmail = ""; contextsStore.modalContexts = []; contextsStore.modalContextEnabled = false; contextsStore.showContextDropdown = false; }}>Cancel</button>
       <button class="create-btn" disabled={!modalPath || !modalTitle || !modalPurpose || (modalGitEnabled && (!modalGitName.trim() || !modalGitEmail.trim()))} onclick={createSession}>Create</button>
     </div>
   </div>
@@ -1650,7 +1617,7 @@ Anti-patterns to avoid:
           <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
           Plugins
         </button>
-        <button class="stg-tab" class:active={settingsTab === 'contexts'} onclick={() => { settingsTab = 'contexts'; loadContextSnippets(); }}>
+        <button class="stg-tab" class:active={settingsTab === 'contexts'} onclick={() => { settingsTab = 'contexts'; contextsStore.loadContextSnippets(); }}>
           <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
           Contexts
         </button>
@@ -1767,41 +1734,41 @@ Anti-patterns to avoid:
     {:else if settingsTab === 'contexts'}
       <div class="stg-section">
         <div class="stg-section-label" style="display:flex;align-items:center;justify-content:space-between;">
-          Saved Contexts ({contextSnippets.length})
-          <button class="save-key-btn" style="font-size:10px;padding:3px 10px;" onclick={() => { contextEditing = { name: '', content: '' }; contextNewName = ''; contextNewContent = ''; }}>+ New</button>
+          Saved Contexts ({contextsStore.contextSnippets.length})
+          <button class="save-key-btn" style="font-size:10px;padding:3px 10px;" onclick={() => { contextsStore.contextEditing = { name: '', content: '' }; contextsStore.contextNewName = ''; contextsStore.contextNewContent = ''; }}>+ New</button>
         </div>
 
-        {#if contextEditing}
+        {#if contextsStore.contextEditing}
           <div class="ctx-editor">
-            <input type="text" class="ctx-name-input" bind:value={contextNewName} placeholder="Context name..." />
-            <textarea class="ctx-content-input" bind:value={contextNewContent} placeholder="Write your context, rules, or instructions..." rows="6"></textarea>
+            <input type="text" class="ctx-name-input" bind:value={contextsStore.contextNewName} placeholder="Context name..." />
+            <textarea class="ctx-content-input" bind:value={contextsStore.contextNewContent} placeholder="Write your context, rules, or instructions..." rows="6"></textarea>
             <div style="display:flex;gap:6px;justify-content:flex-end;">
-              <button class="save-key-btn" style="color:var(--text-secondary);border-color:var(--border);" onclick={() => contextEditing = null}>Cancel</button>
-              <button class="save-key-btn" disabled={!contextNewName.trim() || !contextNewContent.trim()} onclick={saveContextSnippet}>Save</button>
+              <button class="save-key-btn" style="color:var(--text-secondary);border-color:var(--border);" onclick={() => contextsStore.contextEditing = null}>Cancel</button>
+              <button class="save-key-btn" disabled={!contextsStore.contextNewName.trim() || !contextsStore.contextNewContent.trim()} onclick={() => contextsStore.saveContextSnippet()}>Save</button>
             </div>
           </div>
         {/if}
 
         <div class="ctx-list">
-          {#each contextSnippets as ctx}
-            {#if !contextEditing || contextEditing.name !== ctx.name}
+          {#each contextsStore.contextSnippets as ctx}
+            {#if !contextsStore.contextEditing || contextsStore.contextEditing.name !== ctx.name}
             <div class="ctx-card">
               <div class="ctx-card-info">
                 <span class="ctx-card-name">{ctx.name}</span>
                 <span class="ctx-card-preview">{ctx.preview}</span>
               </div>
               <div class="ctx-card-actions">
-                <button class="ctx-action-btn" onclick={() => { contextEditing = ctx; contextNewName = ctx.name; contextNewContent = ctx.content; }} title="Edit">
+                <button class="ctx-action-btn" onclick={() => { contextsStore.contextEditing = ctx; contextsStore.contextNewName = ctx.name; contextsStore.contextNewContent = ctx.content; }} title="Edit">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                 </button>
-                <button class="ctx-action-btn danger" onclick={() => deleteContextSnippet(ctx.name)} title="Delete">
+                <button class="ctx-action-btn danger" onclick={() => contextsStore.deleteContextSnippet(ctx.name)} title="Delete">
                   <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M6.5 1.75a.25.25 0 01.25-.25h2.5a.25.25 0 01.25.25V3h-3V1.75zM11 3V1.75A1.75 1.75 0 009.25 0h-2.5A1.75 1.75 0 005 1.75V3H2.75a.75.75 0 000 1.5h.928l.747 10.218A1.75 1.75 0 006.172 16h3.656a1.75 1.75 0 001.747-1.282L12.322 4.5h.928a.75.75 0 000-1.5H11z"/></svg>
                 </button>
               </div>
             </div>
             {/if}
           {:else}
-            {#if !contextEditing}
+            {#if !contextsStore.contextEditing}
               <div style="padding:20px;text-align:center;font-size:12px;color:var(--text-secondary);">
                 No contexts yet. Create one to attach to sessions.
               </div>
@@ -2108,34 +2075,34 @@ Anti-patterns to avoid:
 </div>
 {/if}
 
-{#if showContextPicker}
+{#if contextsStore.showContextPicker}
 <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
 <div class="modal-backdrop">
   <div class="modal" style="max-width:400px;">
-    <h2 style="font-size:14px;">Manage Contexts — {showContextPicker.title}</h2>
-    {#if contextSnippets.length === 0}
+    <h2 style="font-size:14px;">Manage Contexts — {contextsStore.showContextPicker.title}</h2>
+    {#if contextsStore.contextSnippets.length === 0}
       <p style="font-size:12px;color:var(--text-secondary);">No contexts created yet. Go to Settings → Contexts to create one.</p>
     {:else}
       <div class="ctx-picker-list">
-        {#each contextSnippets as ctx}
+        {#each contextsStore.contextSnippets as ctx}
           <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
           <div class="ctx-picker-item" onclick={() => {
-            const p = showContextPicker;
+            const p = contextsStore.showContextPicker;
             const attached = p.contexts || [];
             const projectPath = p.worktreePath || p.projectPath;
             if (attached.includes(ctx.name)) {
               const updated = attached.filter(c => c !== ctx.name);
-              attachContextsToSession(p.id, projectPath, updated);
+              contextsStore.attachContextsToSession(p.id, projectPath, updated);
               p.contexts = updated;
             } else {
               const updated = [...attached, ctx.name];
-              attachContextsToSession(p.id, projectPath, updated);
+              contextsStore.attachContextsToSession(p.id, projectPath, updated);
               p.contexts = updated;
             }
-            showContextPicker = {...showContextPicker};
+            contextsStore.showContextPicker = {...contextsStore.showContextPicker};
           }}>
             <span class="ctx-picker-check">
-              {#if (showContextPicker.contexts || []).includes(ctx.name)}
+              {#if (contextsStore.showContextPicker.contexts || []).includes(ctx.name)}
                 <svg width="12" height="12" viewBox="0 0 16 16" fill="var(--accent)"><path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/></svg>
               {:else}
                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="var(--text-secondary)" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="2"/></svg>
@@ -2150,7 +2117,7 @@ Anti-patterns to avoid:
       </div>
     {/if}
     <div class="modal-actions">
-      <button onclick={() => showContextPicker = false}>Done</button>
+      <button onclick={() => contextsStore.showContextPicker = false}>Done</button>
     </div>
   </div>
 </div>
