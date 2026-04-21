@@ -10,6 +10,7 @@
   import { pluginsStore } from "$lib/stores/plugins.svelte";
   import { contextsStore } from "$lib/stores/contexts.svelte";
   import { usageStore } from "$lib/stores/usage.svelte";
+  import { gitStore } from "$lib/stores/git.svelte";
 
   let profiles = $state([]);
   let activeProfile = $state(null);
@@ -64,22 +65,7 @@
   let menuProfile = $state(null); // profile whose ellipsis menu is open
   let profileMenuOpen = $state(false);
   let sessionActivity = $state({}); // profileId → 'active' | 'done' | null
-  let gitChanges = $state({}); // profileId → count of changes
-  let gitBranch = $state('');
-  let gitFiles = $state([]); // GitFileChange[]
-  let gitPanelOpen = $state(false);
-  let gitTab = $state('changes'); // 'changes' | 'history' | 'branches'
-  let gitCommitMsg = $state('');
-  let gitLoading = $state('');
-  let gitAhead = $state(0);
-  let gitBehind = $state(0);
-  let gitMsg = $state('');
-
-  let gitDiff = $state('');
-  let gitDiffFile = $state('');
-  let gitCommits = $state([]);
-  let gitBranches = $state([]);
-  let stagedFiles = $state(new Set());
+  // Git state lives in gitStore
 
   // Terminal management — one xterm per profile, switch between them
   const terminalMap = new Map();
@@ -669,159 +655,21 @@
 
   let grouped = $derived(groupByProject(profiles));
 
-  async function refreshGitStatus() {
-    if (!activeProfile) return;
-    const path = activeProfile.worktreePath || activeProfile.projectPath;
-    try {
-      const [branch, files, aheadBehind] = await Promise.all([
-        invoke("get_git_branch", { projectPath: path }),
-        invoke("get_git_status", { projectPath: path }),
-        invoke("get_git_ahead_behind", { projectPath: path }).catch(() => [0, 0]),
-      ]);
-      gitBranch = branch;
-      gitFiles = files;
-      gitAhead = aheadBehind[0] || 0;
-      gitBehind = aheadBehind[1] || 0;
-      gitChanges[activeProfile.id] = files.length;
-      gitChanges = {...gitChanges};
-    } catch(_) { gitBranch = ''; gitFiles = []; gitAhead = 0; gitBehind = 0; }
-  }
-
-  function showGitMsg(msg, duration = 3000) {
-    gitMsg = msg;
-    setTimeout(() => { if (gitMsg === msg) gitMsg = ''; }, duration);
-  }
-
-  async function doGitCommit() {
-    if (!activeProfile || !gitCommitMsg.trim()) return;
-    const path = activeProfile.worktreePath || activeProfile.projectPath;
-    gitLoading = 'commit';
-    try {
-      const result = await invoke("git_commit", { projectPath: path, message: gitCommitMsg.trim() });
-      gitCommitMsg = '';
-      showGitMsg(result.includes('Nothing') ? 'Nothing to commit' : 'Committed');
-      await refreshGitStatus();
-    } catch(e) { showGitMsg('Commit failed'); }
-    gitLoading = '';
-  }
-
-  async function doGitPush() {
-    if (!activeProfile) return;
-    const path = activeProfile.worktreePath || activeProfile.projectPath;
-    gitLoading = 'push';
-    try {
-      await invoke("git_push", { projectPath: path });
-      showGitMsg('Pushed');
-      await refreshGitStatus();
-    } catch(e) { showGitMsg('Push failed'); }
-    gitLoading = '';
-  }
-
-  async function doGitPull() {
-    if (!activeProfile) return;
-    const path = activeProfile.worktreePath || activeProfile.projectPath;
-    gitLoading = 'pull';
-    try {
-      await invoke("git_pull", { projectPath: path });
-      showGitMsg('Pulled');
-      await refreshGitStatus();
-    } catch(e) { showGitMsg('Pull failed'); }
-    gitLoading = '';
-  }
-
-  async function viewDiff(file) {
-    if (!activeProfile) return;
-    const path = activeProfile.worktreePath || activeProfile.projectPath;
-    gitDiffFile = file.path;
-    try { gitDiff = await invoke("git_diff_file", { projectPath: path, filePath: file.path }); } catch(_) { gitDiff = 'Failed to load diff'; }
-  }
-
-  async function toggleStageFile(file) {
-    if (!activeProfile) return;
-    const path = activeProfile.worktreePath || activeProfile.projectPath;
-    const isStaged = stagedFiles.has(file.path);
-    try {
-      if (isStaged) {
-        await invoke("git_unstage_file", { projectPath: path, filePath: file.path });
-        stagedFiles.delete(file.path);
-      } else {
-        await invoke("git_stage_file", { projectPath: path, filePath: file.path });
-        stagedFiles.add(file.path);
-      }
-      stagedFiles = new Set(stagedFiles);
-      await refreshGitStatus();
-    } catch(_) {}
-  }
-
-  async function doGitCommitStaged() {
-    if (!activeProfile || !gitCommitMsg.trim()) return;
-    const path = activeProfile.worktreePath || activeProfile.projectPath;
-    gitLoading = 'commit';
-    try {
-      // If no files manually staged, stage all
-      if (stagedFiles.size === 0) {
-        await invoke("git_commit", { projectPath: path, message: gitCommitMsg.trim() });
-      } else {
-        // Commit only staged files
-        const output = await invoke("git_commit", { projectPath: path, message: gitCommitMsg.trim() });
-      }
-      gitCommitMsg = '';
-      stagedFiles = new Set();
-      showGitMsg('Committed');
-      await refreshGitStatus();
-    } catch(e) { showGitMsg('Commit failed'); }
-    gitLoading = '';
-  }
-
-  async function loadGitHistory() {
-    if (!activeProfile) return;
-    const path = activeProfile.worktreePath || activeProfile.projectPath;
-    try { gitCommits = await invoke("git_log", { projectPath: path, limit: 20 }); } catch(_) { gitCommits = []; }
-  }
-
-  async function loadGitBranches() {
-    if (!activeProfile) return;
-    const path = activeProfile.worktreePath || activeProfile.projectPath;
-    try { gitBranches = await invoke("git_list_branches", { projectPath: path }); } catch(_) { gitBranches = []; }
-  }
-
-  async function switchBranch(branchName) {
-    if (!activeProfile) return;
-    const path = activeProfile.worktreePath || activeProfile.projectPath;
-    try {
-      await invoke("git_switch_branch", { projectPath: path, branchName });
-      showGitMsg(`Switched to ${branchName}`);
-      await refreshGitStatus();
-      await loadGitBranches();
-    } catch(e) {
-      const err = String(e);
-      if (err.includes('uncommitted') || err.includes('overwritten') || err.includes('changes')) {
-        showGitMsg('Commit or stash changes first', 5000);
-      } else {
-        showGitMsg('Switch failed: ' + err.slice(0, 50), 5000);
-      }
-    }
-  }
-
-  async function doGitStash() {
-    if (!activeProfile) return;
-    const path = activeProfile.worktreePath || activeProfile.projectPath;
-    try {
-      await invoke("git_stash", { projectPath: path });
-      showGitMsg('Stashed');
-      await refreshGitStatus();
-    } catch(e) { showGitMsg('Stash failed'); }
-  }
-
-  async function doGitStashPop() {
-    if (!activeProfile) return;
-    const path = activeProfile.worktreePath || activeProfile.projectPath;
-    try {
-      await invoke("git_stash_pop", { projectPath: path });
-      showGitMsg('Stash applied');
-      await refreshGitStatus();
-    } catch(e) { showGitMsg('Stash pop failed'); }
-  }
+  // Git helpers — delegates to gitStore, passing resolved projectPath
+  function gitPath() { return activeProfile?.worktreePath || activeProfile?.projectPath || ''; }
+  function gitProfileId() { return activeProfile?.id; }
+  function refreshGitStatus() { if (activeProfile) gitStore.refreshGitStatus(gitPath(), gitProfileId()); }
+  function doGitCommit() { if (activeProfile) gitStore.doGitCommit(gitPath()); }
+  function doGitCommitStaged() { if (activeProfile) gitStore.doGitCommitStaged(gitPath()); }
+  function doGitPush() { if (activeProfile) gitStore.doGitPush(gitPath()); }
+  function doGitPull() { if (activeProfile) gitStore.doGitPull(gitPath()); }
+  function viewDiff(file) { if (activeProfile) gitStore.viewDiff(gitPath(), file); }
+  function toggleStageFile(file) { if (activeProfile) gitStore.toggleStageFile(gitPath(), gitProfileId(), file); }
+  function loadGitHistory() { if (activeProfile) gitStore.loadGitHistory(gitPath()); }
+  function loadGitBranches() { if (activeProfile) gitStore.loadGitBranches(gitPath()); }
+  function switchBranch(branchName) { if (activeProfile) gitStore.switchBranch(gitPath(), gitProfileId(), branchName); }
+  function doGitStash() { if (activeProfile) gitStore.doGitStash(gitPath(), gitProfileId()); }
+  function doGitStashPop() { if (activeProfile) gitStore.doGitStashPop(gitPath(), gitProfileId()); }
 
   function handleFileDrop(e) {
     if (!activeTermEntry?.terminalId) return;
@@ -1071,7 +919,7 @@ Anti-patterns to avoid:
   });
 </script>
 
-<svelte:window onkeydown={handleGlobalKeydown} onresize={handleWindowResize} onclick={() => { menuProfile = null; profileMenuOpen = false; gitPanelOpen = false; contextsStore.showContextDropdown = false; }} oncontextmenu={(e) => { if (!import.meta.env.DEV) e.preventDefault(); }} />
+<svelte:window onkeydown={handleGlobalKeydown} onresize={handleWindowResize} onclick={() => { menuProfile = null; profileMenuOpen = false; gitStore.gitPanelOpen = false; contextsStore.showContextDropdown = false; }} oncontextmenu={(e) => { if (!import.meta.env.DEV) e.preventDefault(); }} />
 
 <div class="app-wrapper">
 <div class="app">
@@ -1220,32 +1068,32 @@ Anti-patterns to avoid:
         </div>
       {/if}
     </div>
-    {#if activeProfile && gitBranch}
+    {#if activeProfile && gitStore.gitBranch}
     <div class="git-status-wrap">
       <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-      <div class="git-status-bar" onclick={(e) => { e.stopPropagation(); gitPanelOpen = !gitPanelOpen; }}>
+      <div class="git-status-bar" onclick={(e) => { e.stopPropagation(); gitStore.gitPanelOpen = !gitStore.gitPanelOpen; }}>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 01-9 9"/></svg>
-        <span class="git-bar-branch">{gitBranch}</span>
-        {#if gitAhead > 0}
-          <span class="git-bar-ahead" title="{gitAhead} unpushed">↑{gitAhead}</span>
+        <span class="git-bar-branch">{gitStore.gitBranch}</span>
+        {#if gitStore.gitAhead > 0}
+          <span class="git-bar-ahead" title="{gitStore.gitAhead} unpushed">↑{gitStore.gitAhead}</span>
         {/if}
-        {#if gitBehind > 0}
-          <span class="git-bar-behind" title="{gitBehind} to pull">↓{gitBehind}</span>
+        {#if gitStore.gitBehind > 0}
+          <span class="git-bar-behind" title="{gitStore.gitBehind} to pull">↓{gitStore.gitBehind}</span>
         {/if}
-        {#if gitFiles.length > 0}
-          <span class="git-bar-changes">{gitFiles.length}</span>
+        {#if gitStore.gitFiles.length > 0}
+          <span class="git-bar-changes">{gitStore.gitFiles.length}</span>
         {/if}
-        {#if gitMsg}
-          <span class="git-bar-msg">{gitMsg}</span>
+        {#if gitStore.gitMsg}
+          <span class="git-bar-msg">{gitStore.gitMsg}</span>
         {/if}
       </div>
-      {#if gitPanelOpen}
+      {#if gitStore.gitPanelOpen}
         <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
         <div class="git-popup" onclick={(e) => e.stopPropagation()}>
           <div class="git-popup-tabs">
-            <button class="git-popup-tab" class:active={gitTab === 'changes'} onclick={() => gitTab = 'changes'}>Changes{gitFiles.length > 0 ? ` (${gitFiles.length})` : ''}</button>
-            <button class="git-popup-tab" class:active={gitTab === 'history'} onclick={() => { gitTab = 'history'; loadGitHistory(); }}>History</button>
-            <button class="git-popup-tab" class:active={gitTab === 'branches'} onclick={() => { gitTab = 'branches'; loadGitBranches(); }}>Branches</button>
+            <button class="git-popup-tab" class:active={gitStore.gitTab === 'changes'} onclick={() => gitStore.gitTab = 'changes'}>Changes{gitStore.gitFiles.length > 0 ? ` (${gitStore.gitFiles.length})` : ''}</button>
+            <button class="git-popup-tab" class:active={gitStore.gitTab === 'history'} onclick={() => { gitStore.gitTab = 'history'; loadGitHistory(); }}>History</button>
+            <button class="git-popup-tab" class:active={gitStore.gitTab === 'branches'} onclick={() => { gitStore.gitTab = 'branches'; loadGitBranches(); }}>Branches</button>
             <div class="git-popup-tab-actions">
               <button class="git-action-btn has-tooltip" onclick={doGitStash}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v14a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
@@ -1255,38 +1103,38 @@ Anti-patterns to avoid:
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v14a2 2 0 01-2 2z"/><polyline points="12 8 12 16"/><polyline points="8 12 12 8 16 12"/></svg>
                 <span class="btn-tooltip">Pop Stash</span>
               </button>
-              <button class="git-action-btn has-tooltip" disabled={gitLoading === 'pull'} onclick={doGitPull}>
+              <button class="git-action-btn has-tooltip" disabled={gitStore.gitLoading === 'pull'} onclick={doGitPull}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
-                <span class="btn-tooltip">{gitLoading === 'pull' ? 'Pulling...' : 'Pull'}</span>
+                <span class="btn-tooltip">{gitStore.gitLoading === 'pull' ? 'Pulling...' : 'Pull'}</span>
               </button>
-              <button class="git-action-btn has-tooltip" disabled={gitLoading === 'push'} onclick={doGitPush}>
+              <button class="git-action-btn has-tooltip" disabled={gitStore.gitLoading === 'push'} onclick={doGitPush}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
-                <span class="btn-tooltip">{gitLoading === 'push' ? 'Pushing...' : 'Push'}</span>
+                <span class="btn-tooltip">{gitStore.gitLoading === 'push' ? 'Pushing...' : 'Push'}</span>
               </button>
             </div>
           </div>
 
-          {#if gitTab === 'changes'}
-            {#if gitDiffFile}
+          {#if gitStore.gitTab === 'changes'}
+            {#if gitStore.gitDiffFile}
               <div class="git-diff-header">
-                <button class="git-diff-back" onclick={() => { gitDiffFile = ''; gitDiff = ''; }}>
+                <button class="git-diff-back" onclick={() => { gitStore.gitDiffFile = ''; gitStore.gitDiff = ''; }}>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
                 </button>
-                <span class="git-diff-filename">{gitDiffFile}</span>
+                <span class="git-diff-filename">{gitStore.gitDiffFile}</span>
               </div>
               <div class="git-diff-view">
-                {#each gitDiff.split('\n') as line}
+                {#each gitStore.gitDiff.split('\n') as line}
                   <div class="git-diff-line" class:diff-add={line.startsWith('+')} class:diff-del={line.startsWith('-')} class:diff-hunk={line.startsWith('@@')}>{line}</div>
                 {/each}
               </div>
-            {:else if gitFiles.length > 0}
+            {:else if gitStore.gitFiles.length > 0}
               <div class="git-file-list">
-                {#each gitFiles as file}
+                {#each gitStore.gitFiles as file}
                   <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
                   <div class="git-file-item" onclick={() => viewDiff(file)}>
                     <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-                    <span class="git-file-stage" onclick={(e) => { e.stopPropagation(); toggleStageFile(file); }} title={stagedFiles.has(file.path) ? 'Unstage' : 'Stage'}>
-                      {#if stagedFiles.has(file.path)}
+                    <span class="git-file-stage" onclick={(e) => { e.stopPropagation(); toggleStageFile(file); }} title={gitStore.stagedFiles.has(file.path) ? 'Unstage' : 'Stage'}>
+                      {#if gitStore.stagedFiles.has(file.path)}
                         <svg width="12" height="12" viewBox="0 0 16 16" fill="var(--accent)"><path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/></svg>
                       {:else}
                         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="var(--text-secondary)" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="2"/></svg>
@@ -1298,18 +1146,18 @@ Anti-patterns to avoid:
                 {/each}
               </div>
               <div class="git-commit-row">
-                <input class="git-commit-input" type="text" bind:value={gitCommitMsg} placeholder="Commit message..." onkeydown={(e) => { if (e.key === 'Enter' && gitCommitMsg.trim()) doGitCommitStaged(); }} />
-                <button class="git-commit-btn" disabled={!gitCommitMsg.trim() || gitLoading === 'commit'} onclick={doGitCommitStaged}>
-                  {gitLoading === 'commit' ? '...' : 'Commit'}
+                <input class="git-commit-input" type="text" bind:value={gitStore.gitCommitMsg} placeholder="Commit message..." onkeydown={(e) => { if (e.key === 'Enter' && gitStore.gitCommitMsg.trim()) doGitCommitStaged(); }} />
+                <button class="git-commit-btn" disabled={!gitStore.gitCommitMsg.trim() || gitStore.gitLoading === 'commit'} onclick={doGitCommitStaged}>
+                  {gitStore.gitLoading === 'commit' ? '...' : 'Commit'}
                 </button>
               </div>
             {:else}
               <div class="git-empty">Working tree clean</div>
             {/if}
 
-          {:else if gitTab === 'history'}
+          {:else if gitStore.gitTab === 'history'}
             <div class="git-history-list">
-              {#each gitCommits as commit}
+              {#each gitStore.gitCommits as commit}
                 <div class="git-commit-item">
                   <span class="git-commit-hash">{commit.short}</span>
                   <span class="git-commit-message">{commit.message}</span>
@@ -1320,9 +1168,9 @@ Anti-patterns to avoid:
               {/each}
             </div>
 
-          {:else if gitTab === 'branches'}
+          {:else if gitStore.gitTab === 'branches'}
             <div class="git-branch-list">
-              {#each gitBranches as branch}
+              {#each gitStore.gitBranches as branch}
                 <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
                 <div class="git-branch-item" class:current={branch.current} onclick={() => { if (!branch.current) switchBranch(branch.name); }}>
                   {#if branch.current}
