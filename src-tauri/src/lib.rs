@@ -1,19 +1,16 @@
-pub mod models;
-pub use models::*;
+mod models;
+mod storage;
+mod profiles;
+mod git;
+mod worktree;
+mod terminal;
+mod plugins;
+mod usage;
+mod sessions;
+mod contexts;
+mod system;
 
-pub mod storage;
-use storage::*;
-
-pub mod profiles;
-pub mod git;
-pub mod worktree;
-pub mod terminal;
-pub mod plugins;
-pub mod usage;
-pub mod sessions;
-pub mod contexts;
-pub mod system;
-
+use models::TerminalState;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
