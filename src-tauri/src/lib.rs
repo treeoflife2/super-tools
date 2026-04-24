@@ -1,200 +1,233 @@
-mod models;
-mod storage;
-mod profiles;
-mod git;
-mod worktree;
-mod terminal;
-mod plugins;
-mod usage;
-mod sessions;
-mod contexts;
-mod system;
+mod appearance;
+mod commands;
+mod db;
+mod github;
 
-use models::TerminalState;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::tray::TrayIconBuilder;
+use std::str::FromStr;
+use std::sync::Arc;
 use tauri::Manager;
-
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
-        .manage(TerminalState::default())
-        .invoke_handler(tauri::generate_handler![
-            profiles::get_profiles,
-            profiles::create_profile,
-            profiles::delete_profile,
-            profiles::rename_profile,
-            profiles::update_profile,
-            profiles::update_last_used,
-            sessions::refresh_session_ids,
-            sessions::update_session_id,
-            worktree::is_git_repo,
-            git::get_git_status,
-            git::get_git_branch,
-            git::get_git_ahead_behind,
-            git::git_commit,
-            git::git_push,
-            git::git_pull,
-            git::git_diff_file,
-            git::git_stage_file,
-            git::git_unstage_file,
-            git::git_log,
-            git::git_stash,
-            git::git_stash_pop,
-            git::git_list_branches,
-            git::git_switch_branch,
-            worktree::create_worktree,
-            worktree::remove_worktree,
-            worktree::update_profile_worktree,
-            sessions::count_project_sessions,
-            sessions::discover_sessions,
-            sessions::get_session_tokens,
-            sessions::get_session_context_usage,
-            usage::fetch_usage_limits,
-            usage::get_usage_analytics,
-            system::get_app_version,
-            system::get_claude_plan,
-            system::update_tray_title,
-            system::save_session_key,
-            system::load_session_key,
-            terminal::spawn_terminal,
-            terminal::spawn_shell,
-            terminal::write_to_terminal,
-            terminal::resize_terminal,
-            terminal::kill_terminal,
-            plugins::get_claude_plugins,
-            plugins::toggle_claude_plugin,
-            plugins::get_marketplace_plugins,
-            plugins::install_plugin,
-            plugins::uninstall_plugin,
-            contexts::get_context_snippets,
-            contexts::save_context_snippet,
-            contexts::delete_context_snippet,
-            contexts::inject_session_context,
-            contexts::remove_injected_context,
-            sessions::update_session_contexts
-        ])
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_http::init())
+        .plugin(
+            tauri_plugin_sql::Builder::default()
+                .add_migrations("sqlite:qorix.db", db::migrations::get_migrations())
+                .build(),
+        )
         .setup(|app| {
-            let setup_start = std::time::Instant::now();
-            eprintln!("[TIMING] setup start");
+            if cfg!(debug_assertions) {
+                app.handle().plugin(
+                    tauri_plugin_log::Builder::default()
+                        .level(log::LevelFilter::Info)
+                        .build(),
+                )?;
+            }
 
-            let window = app.get_webview_window("main").unwrap();
-
+            // Set rounded corners + dock icon
             #[cfg(target_os = "macos")]
             {
-                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
-                apply_vibrancy(&window, NSVisualEffectMaterial::Sidebar, None, None)
-                    .expect("Failed to apply vibrancy");
+                use cocoa::appkit::{NSApp, NSApplication, NSImage, NSWindow};
+                use cocoa::base::{nil, id};
+                use cocoa::foundation::NSData;
+
+                // Round the window corners
+                if let Some(win) = app.get_webview_window("main") {
+                    use objc::{runtime::Object, sel, sel_impl};
+                    let ns_win: *mut Object = win.ns_window().unwrap() as *mut Object;
+                    unsafe {
+                        let _: () = objc::msg_send![ns_win, setHasShadow: true];
+                        let content_view: *mut Object = objc::msg_send![ns_win, contentView];
+                        let _: () = objc::msg_send![content_view, setWantsLayer: true];
+                        let layer: *mut Object = objc::msg_send![content_view, layer];
+                        let _: () = objc::msg_send![layer, setCornerRadius: 10.0_f64];
+                        let _: () = objc::msg_send![layer, setMasksToBounds: true];
+                    }
+                }
+                let icon_data = include_bytes!("../icons/icon.png");
+                unsafe {
+                    let ns_data = NSData::dataWithBytes_length_(
+                        nil,
+                        icon_data.as_ptr() as *const std::ffi::c_void,
+                        icon_data.len() as u64,
+                    );
+                    let ns_image = NSImage::initWithData_(NSImage::alloc(nil), ns_data);
+                    NSApp().setApplicationIconImage_(ns_image);
+                }
             }
-            eprintln!("[TIMING] vibrancy applied: {:?}", setup_start.elapsed());
 
-            // ---- App menu bar ----
-            let app_menu = Submenu::with_items(app, "Clauge", true, &[
-                &PredefinedMenuItem::about(app, Some("About Clauge"), None)?,
-                &PredefinedMenuItem::separator(app)?,
-                &PredefinedMenuItem::services(app, None)?,
-                &PredefinedMenuItem::separator(app)?,
-                &PredefinedMenuItem::hide(app, None)?,
-                &PredefinedMenuItem::hide_others(app, None)?,
-                &PredefinedMenuItem::show_all(app, None)?,
-                &PredefinedMenuItem::separator(app)?,
-                &PredefinedMenuItem::quit(app, None)?,
-            ])?;
-            let edit_menu = Submenu::with_items(app, "Edit", true, &[
-                &PredefinedMenuItem::undo(app, None)?,
-                &PredefinedMenuItem::redo(app, None)?,
-                &PredefinedMenuItem::separator(app)?,
-                &PredefinedMenuItem::cut(app, None)?,
-                &PredefinedMenuItem::copy(app, None)?,
-                &PredefinedMenuItem::paste(app, None)?,
-                &PredefinedMenuItem::select_all(app, None)?,
-            ])?;
-            let window_menu = Submenu::with_items(app, "Window", true, &[
-                &PredefinedMenuItem::minimize(app, None)?,
-                &PredefinedMenuItem::maximize(app, None)?,
-            ])?;
-            let menu_bar = Menu::with_items(app, &[&app_menu, &edit_menu, &window_menu])?;
-            app.set_menu(menu_bar)?;
+            // Initialize sqlx connection pool for Rust commands
+            let app_data_dir = app
+                .path()
+                .app_data_dir()
+                .expect("failed to get app data dir");
+            std::fs::create_dir_all(&app_data_dir).ok();
+            let db_path = app_data_dir.join("qorix.db");
+            let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
 
-            // ---- System tray ----
-            let show_item = MenuItem::with_id(app, "show", "Back to App", true, None::<&str>)?;
-            let separator = PredefinedMenuItem::separator(app)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let pool = tauri::async_runtime::block_on(async {
+                let opts = sqlx::sqlite::SqliteConnectOptions::from_str(&db_url)
+                    .expect("invalid db url")
+                    .pragma("foreign_keys", "ON")
+                    .create_if_missing(true);
+                sqlx::sqlite::SqlitePoolOptions::new()
+                    .max_connections(5)
+                    .connect_with(opts)
+                    .await
+                    .expect("failed to connect to database")
+            });
 
-            let menu = Menu::with_items(app, &[&show_item, &separator, &quit])?;
-
-            // Use custom tray icon — template mode so macOS adapts to light/dark menu bar
-            let icon_png = include_bytes!("../icons/tray-dark.png");
-            let img = image::load_from_memory(icon_png).expect("Failed to load tray icon");
-            let rgba = img.to_rgba8();
-            let (w, h) = rgba.dimensions();
-            let tray_icon = tauri::image::Image::new_owned(rgba.into_raw(), w, h);
-            TrayIconBuilder::with_id("main-tray")
-                .icon(tray_icon)
-                .icon_as_template(true)
-                .menu(&menu)
-                .title("Clauge")
-                .tooltip("Clauge — Claude Session Manager")
-                .on_menu_event(move |app: &tauri::AppHandle, event: tauri::menu::MenuEvent| {
-                    let id = event.id().as_ref();
-                    if id == "quit" {
-                        app.exit(0);
-                    } else if id == "show" {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
+            // Run schema migrations directly via sqlx
+            tauri::async_runtime::block_on(async {
+                for migration in db::migrations::get_migrations() {
+                    for statement in migration.sql.split(';') {
+                        let stmt = statement.trim();
+                        if !stmt.is_empty() {
+                            if let Err(e) = sqlx::query(stmt).execute(&pool).await {
+                                // Ignore "already exists" / "duplicate column" errors from re-running migrations
+                                let err_str = e.to_string();
+                                if !err_str.contains("already exists") && !err_str.contains("duplicate column") {
+                                    eprintln!("Migration v{} statement failed: {}", migration.version, e);
+                                }
+                            }
                         }
                     }
-                })
-                .build(app)?;
+                }
+            });
 
-            eprintln!("[TIMING] tray built: {:?}", setup_start.elapsed());
+            // Load saved vibrancy material before managing pool (which moves it)
+            let saved_material = tauri::async_runtime::block_on(async {
+                sqlx::query_as::<_, (String,)>(
+                    "SELECT value FROM settings WHERE key = 'vibrancy_material'",
+                )
+                .fetch_optional(&pool)
+                .await
+                .ok()
+                .flatten()
+                .map(|r| r.0)
+                .unwrap_or_else(|| "sidebar".to_string())
+            });
 
-            // Enable autostart on first run
-            use tauri_plugin_autostart::ManagerExt;
-            let _ = app.autolaunch().enable();
+            app.manage(pool);
+            app.manage(Arc::new(commands::sql_client::SqlConnectionManager::new()));
+            app.manage(commands::nosql_client::create_nosql_state());
 
-            eprintln!("[TIMING] setup complete: {:?}", setup_start.elapsed());
+            // Apply vibrancy on macOS — use Sidebar material (what native macOS apps use)
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = appearance::vibrancy::apply_vibrancy(&window, &saved_material);
+            }
+
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // Hide instead of quit — user can quit from tray
-                api.prevent_close();
-                let _ = window.hide();
-            }
-        })
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app, event| {
-            match event {
-                tauri::RunEvent::Reopen { .. } => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                }
-                tauri::RunEvent::ExitRequested { .. } => {
-                    if let Some(state) = app.try_state::<TerminalState>() {
-                        let mut terminals = state.terminals.lock();
-                        for (id, mut entry) in terminals.drain() {
-                            let _ = entry.child.kill();
-                            eprintln!("[Clauge] Cleaned up terminal {} on exit", id);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        });
+        .invoke_handler(tauri::generate_handler![
+            commands::collections::list_collections,
+            commands::collections::create_collection,
+            commands::collections::update_collection,
+            commands::collections::delete_collection,
+            commands::collections::reorder_collections,
+            commands::requests::list_requests,
+            commands::requests::get_request,
+            commands::requests::create_request,
+            commands::requests::update_request,
+            commands::requests::delete_request,
+            commands::requests::duplicate_request,
+            commands::requests::move_request,
+            commands::requests::update_request_headers,
+            commands::requests::update_request_params,
+            commands::environments::list_environments,
+            commands::environments::create_environment,
+            commands::environments::update_environment,
+            commands::environments::delete_environment,
+            commands::environments::set_default_environment,
+            commands::environments::list_env_variables,
+            commands::environments::set_env_variable,
+            commands::environments::update_env_variable,
+            commands::environments::delete_env_variable,
+            commands::environments::get_env_variables_for_resolution,
+            commands::http_executor::execute_request,
+            commands::http_executor::quick_execute,
+            commands::history::list_history,
+            commands::history::clear_history,
+            commands::history::delete_history_entry,
+            commands::settings::get_setting,
+            commands::settings::set_setting,
+            commands::settings::get_all_settings,
+            appearance::vibrancy::set_vibrancy,
+            appearance::vibrancy::get_appearance,
+            appearance::vibrancy::set_appearance,
+            appearance::vibrancy::get_available_themes,
+            github::oauth::github_connect,
+            github::oauth::github_disconnect,
+            github::oauth::github_get_status,
+            github::oauth::github_get_oauth_url,
+            github::oauth::github_connect_with_token,
+            github::gist::gist_check_exists,
+            github::gist::gist_sync_push,
+            github::gist::gist_sync_pull,
+            commands::import_export::export_collection,
+            commands::import_export::export_all_collections,
+            commands::import_export::import_qorix,
+            commands::import_export::import_postman,
+            commands::import_export::import_curl,
+            commands::import_export::export_as_curl,
+            commands::sql_client::sql_connect,
+            commands::sql_client::sql_connect_database,
+            commands::sql_client::sql_disconnect,
+            commands::sql_client::sql_test_connection,
+            commands::sql_client::sql_execute_query,
+            commands::sql_client::sql_list_databases,
+            commands::sql_client::sql_create_database,
+            commands::sql_client::sql_list_schemas,
+            commands::sql_client::sql_list_tables,
+            commands::sql_client::sql_describe_table,
+            commands::sql_client::sql_save_connection,
+            commands::sql_client::sql_list_saved_connections,
+            commands::sql_client::sql_delete_saved_connection,
+            commands::sql_client::sql_update_saved_connection,
+            commands::sql_client::sql_save_script,
+            commands::sql_client::sql_list_scripts,
+            commands::sql_client::sql_update_script,
+            commands::sql_client::sql_delete_script,
+            commands::nosql_client::nosql_connect,
+            commands::nosql_client::nosql_disconnect,
+            commands::nosql_client::nosql_test_connection,
+            commands::nosql_client::nosql_list_databases,
+            commands::nosql_client::nosql_list_collections,
+            commands::nosql_client::nosql_find_documents,
+            commands::nosql_client::nosql_insert_document,
+            commands::nosql_client::nosql_update_document,
+            commands::nosql_client::nosql_delete_document,
+            commands::nosql_client::nosql_count_documents,
+            commands::nosql_client::nosql_aggregate,
+            commands::nosql_client::nosql_create_collection,
+            commands::nosql_client::nosql_drop_database,
+            commands::nosql_client::nosql_drop_collection,
+            commands::nosql_client::nosql_rename_collection,
+            commands::nosql_client::redis_execute,
+            commands::nosql_client::redis_list_keys,
+            commands::nosql_client::redis_get_key,
+            commands::nosql_client::redis_set_key,
+            commands::nosql_client::redis_delete_key,
+            commands::nosql_client::redis_get_info,
+            commands::nosql_client::nosql_save_connection,
+            commands::nosql_client::nosql_list_saved_connections,
+            commands::nosql_client::nosql_delete_saved_connection,
+            commands::nosql_client::nosql_update_saved_connection,
+            commands::ai::test_ai_key,
+            commands::ai::get_ai_usage_stats,
+            commands::ai::get_ai_provider_stats,
+            commands::ai::reset_ai_usage,
+            commands::ai::record_ai_usage,
+            commands::ai::ai_chat,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }

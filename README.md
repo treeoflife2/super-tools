@@ -1,165 +1,87 @@
 <p align="center">
-  <img src="src-tauri/icons/clauge-mark.svg" alt="Clauge" width="96" />
+  <img src="assets/bear-face-icon.svg" alt="Qorix" width="140" />
 </p>
 
-<h1 align="center">Clauge</h1>
+<h1 align="center">Qorix</h1>
 
 <p align="center">
-  <strong>The Claude Code workspace built for developers who refuse to wait.</strong><br/>
-  Parallel sessions. Smart purposes. Git built in. 6 MB.
-</p>
-
-<p align="center">
-  <a href="https://github.com/ansxuman/Clauge/releases/latest"><img src="https://img.shields.io/github/v/release/ansxuman/Clauge?style=flat-square&color=1dc880&label=latest" alt="Release"></a>
-  <a href="https://github.com/ansxuman/Clauge/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-7c5cf8?style=flat-square" alt="License"></a>
-  <a href="https://github.com/ansxuman/Clauge/stargazers"><img src="https://img.shields.io/github/stars/ansxuman/Clauge?style=flat-square&color=f5a623" alt="Stars"></a>
-  <img src="https://img.shields.io/badge/built%20with-Rust%20%2B%20Tauri-CE422B?style=flat-square" alt="Rust + Tauri">
-  <img src="https://img.shields.io/badge/binary-6%20MB-4f94d4?style=flat-square" alt="6 MB">
+  <strong>AI-powered developer toolkit for REST APIs, SQL, and NoSQL</strong>
 </p>
 
 <p align="center">
-  <a href="https://clauge.ssh-i.in">Website</a> ·
-  <a href="https://clauge.ssh-i.in/changelog.html">Changelog</a> ·
-  <a href="https://github.com/ansxuman/Clauge/releases/latest"><strong>Download for macOS →</strong></a> ·
-  <a href="https://github.com/ansxuman/Clauge/issues">Report Bug</a> ·
-  <a href="https://buymeacoffee.com/ansxuman">Buy me a coffee</a>
+  <a href="https://github.com/ansxuman/QoriX/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-7c5cf8?style=flat-square" alt="License"></a>
+  <a href="https://github.com/ansxuman/QoriX/stargazers"><img src="https://img.shields.io/github/stars/ansxuman/QoriX?style=flat-square&color=f5a623" alt="Stars"></a>
+  <a href="https://github.com/ansxuman/QoriX/issues"><img src="https://img.shields.io/github/issues/ansxuman/QoriX?style=flat-square&color=4f94d4" alt="Issues"></a>
+  <a href="https://github.com/ansxuman/QoriX/releases/latest"><img src="https://img.shields.io/github/v/release/ansxuman/QoriX?style=flat-square&color=1dc880" alt="Release"></a>
 </p>
 
----
-
-## Why Clauge?
-
-Most Claude Code workflows bottleneck on a single session. You start a feature, need to review a PR, hit a bug — and now you're either context-switching in the same terminal or juggling multiple windows with no organization.
-
-Clauge is a macOS app built specifically for Claude Code. It gives every task its own session, its own purpose, its own terminal — all organized by project, all running in parallel. Built with Rust and Tauri, the entire app fits in 6 MB.
-
-**Wait less. Ship more.**
-
----
-
-## What's a Purpose?
-
-Every Clauge session has a purpose that shapes Claude's focus from the very first message. No more prompting Claude to "act like a code reviewer" mid-conversation.
-
-| Purpose | What Claude focuses on |
-|---|---|
-| **Brainstorming** | Architecture, tradeoffs, multiple approaches — before writing a line |
-| **Development** | Clean, tested, pattern-consistent code shipped in small verified steps |
-| **Code Review** | Bugs, security holes, edge cases — with file and line references |
-| **PR Review** | End-to-end pull request analysis: what changed, what's good, what needs work |
-| **Debugging** | Root cause, not band-aids — reproduce, trace, verify the fix actually works |
-| **Custom** | Import an existing Claude Code session or define your own mode |
+<p align="center">
+  <a href="https://qorix.ssh-i.in">Website</a> ·
+  <a href="https://qorix.ssh-i.in/changelog">Changelog</a> ·
+  <a href="https://github.com/ansxuman/QoriX/issues">Report Bug</a> ·
+  <a href="https://github.com/ansxuman/QoriX/issues">Request Feature</a>
+</p>
 
 ---
 
 ## Features
 
-### Parallel Sessions with Zero Conflicts
-
-Run as many Claude Code sessions as you need on the same project. Each session is automatically isolated with git worktree support so they never overwrite each other. Auto-detects existing sessions and notifies you before creating duplicates.
-
-### Full Git Integration — Without Leaving the App
-
-- Branch indicator with ahead/behind count in the status bar
-- Color-coded file changes (modified, added, deleted) with inline diff viewer
-- Selective staging with per-file checkboxes
-- Commit, push, pull, stash, pop — all from the UI
-- Branch switching, commit history browsing, and per-session git identity (different name/email per session)
-
-### Usage Dashboard
-
-Know exactly where your API spend is going — without leaving your workflow.
-
-- Total cost, API call count, cache hit rate, session count
-- Daily activity chart with spending trends
-- Per-model breakdown: Opus, Sonnet, Haiku
-- Per-project cost with session counts
-- Tool usage (Read, Edit, Bash, etc.) and shell command patterns
-- Live session and weekly limits with configurable refresh
-- Connect to claude.ai for real-time tracking
-
-### Context Manager
-
-Create reusable snippets — coding guidelines, architectural decisions, system prompts — and attach them to any session. Contexts are written to `CLAUDE.md` with safe markers that don't conflict with your existing content. Add or remove contexts while a session is running.
-
-### Plugin Manager
-
-Browse, install, enable, and disable Claude Code plugins without touching the terminal. One-click management from inside the app.
-
-### Embedded Terminal
-
-GPU-accelerated (WebGL) terminal with full color support, scrollback, resize, and per-session shell panel (`Cmd+L`). Drag-to-resize. File drag-and-drop pastes the path. No separate terminal tab required.
-
-### macOS Polish
-
-- Notification chime when Claude needs your input (repeats until the window is focused)
-- Dock icon bounces on action-required prompts
-- Close-to-tray behavior so your sessions keep running
-- Auto-launch on login
-- Background auto-update
-- Dark/light themes with 6 accent colors
-
----
-
-## Clauge vs. Alternatives
-
-| | **Clauge** | Alternatives |
-|---|:---:|:---:|
-| **Binary size** | **6 MB** | ~455 MB |
-| **Memory footprint** | Low | High |
-| **Claude Code–specific** | ✅ Built for it | ❌ Generic agent wrapper |
-| **Purpose modes** | ✅ 6 built-in | ❌ None |
-| **Usage & cost dashboard** | ✅ Full analytics | ❌ Not available |
-| **Context Manager** | ✅ CLAUDE.md integration | ❌ Not available |
-| **Plugin Manager** | ✅ Built-in marketplace | ❌ Not available |
-| **Per-session git identity** | ✅ | ❌ |
-| **Inline diff viewer** | ✅ | ✅ |
-| **Parallel sessions** | ✅ | ✅ |
-| **Git worktree isolation** | ✅ | ✅ |
-| **Notification system** | ✅ Sound + dock bounce | ✅ |
-| **License** | Apache 2.0 (free forever) | Proprietary / paid tiers |
-
----
-
-## Keyboard Shortcuts
-
-| Shortcut | Action |
-|---|---|
-| `Cmd+N` | New session |
-| `Cmd+1–9` | Switch to session |
-| `Cmd+B` | Toggle sidebar |
-| `Cmd+L` | Toggle shell panel |
-
----
+- **REST API Client** — Build, test, and organize API requests with collections, environments, and variable substitution
+- **AI Assistant** — Describe what you want in plain English and let AI generate requests, queries, and filters
+- **Environment Management** — Global and per-collection environments with secret masking and `{{variable}}` autocomplete
+- **GitHub Gist Sync** — Sync collections, environments, and settings across devices via private GitHub Gists
+- **Native macOS Experience** — Built with Tauri and Rust for a fast, lightweight, native feel with vibrancy/glass effects
+- **JSON Syntax Highlighting** — Color-coded body editor with format, line numbers, and validation
+- **Request History** — Automatic logging of every executed request with status, timing, and response
+- **Keyboard-First** — Full keyboard shortcut support (Cmd+Enter, Cmd+I, Cmd+B, Cmd+1/2/3)
 
 ## Download
 
-<a href="https://github.com/ansxuman/Clauge/releases/latest"><strong>Download for macOS →</strong></a>
+<p>
+  <a href="https://github.com/ansxuman/QoriX/releases/latest"><strong>Download for macOS →</strong></a>
+</p>
 
----
+> Windows and Linux support coming soon.
 
 ## Development
 
-**Requires:** [Bun](https://bun.sh), [Rust](https://rustup.rs) 1.77+, [Tauri CLI](https://tauri.app) v2
+### Prerequisites
+
+- [Bun](https://bun.sh) (latest)
+- [Rust](https://rustup.rs) (1.77+)
+- [Tauri CLI](https://tauri.app) v2
+
+### Setup
 
 ```bash
-git clone https://github.com/ansxuman/Clauge.git
-cd Clauge
+# Clone the repository
+git clone https://github.com/ansxuman/QoriX.git
+cd QoriX
+
+# Install dependencies
 bun install
+
+# Run in development mode
 bun run tauri dev
+
+# Build for production
+bun run tauri build
 ```
 
 ## Tech Stack
 
-| | |
-|---|---|
-| **Frontend** | SvelteKit, Svelte 5 |
-| **Backend** | Rust, Tauri v2 |
-| **Terminal** | xterm.js (WebGL renderer), portable-pty |
+| Layer | Technology |
+|-------|-----------|
+| Frontend | SvelteKit + Svelte 5 + TypeScript |
+| Backend | Rust + Tauri v2 |
+| Database | SQLite (sqlx) |
+| HTTP | reqwest |
+| Auth | GitHub OAuth + OS Keychain |
+| Package Manager | Bun |
 
 ## Contributing
 
-See [CONTRIBUTING.md](.github/CONTRIBUTING.md). Issues and PRs welcome.
+Contributions are welcome! Please read the [Contributing Guide](.github/CONTRIBUTING.md) before submitting a pull request.
 
 ## Support
 
@@ -167,4 +89,4 @@ See [CONTRIBUTING.md](.github/CONTRIBUTING.md). Issues and PRs welcome.
 
 ## License
 
-[Apache License 2.0](LICENSE)
+[Business Source License 1.1](LICENSE)

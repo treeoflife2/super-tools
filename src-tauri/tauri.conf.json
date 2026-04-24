@@ -1,38 +1,29 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Clauge",
-  "version": "2.2.0-alpha",
-  "identifier": "com.clauge.desktop",
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Qorix",
+  "version": "0.24.0",
+  "identifier": "dev.qorix.app",
   "build": {
+    "frontendDist": "../build",
+    "devUrl": "http://localhost:5173",
     "beforeDevCommand": "bun run dev",
-    "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run build",
-    "frontendDist": "../build"
+    "beforeBuildCommand": "bun run build"
   },
   "app": {
     "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "Clauge",
-        "width": 1200,
-        "height": 800,
+        "title": "Qorix",
+        "width": 1400,
+        "height": 900,
         "minWidth": 900,
         "minHeight": 600,
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": true,
-        "transparent": true
+        "transparent": true,
+        "decorations": false
       }
     ],
     "security": {
       "csp": null
-    }
-  },
-  "plugins": {
-    "updater": {
-      "endpoints": [
-        "https://github.com/ansxuman/Clauge/releases/latest/download/latest.json"
-      ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUxNTMyMTA3Nzc0NzA3NzUKUldSMUIwZDNCeUZUVVhEdkRHdk1qd0NmS2hybWZEWXYwQWxoVjh3STF5KzVkNzY1aTlxelgvMlQK"
     }
   },
   "bundle": {
@@ -47,19 +38,19 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "dmg": {
-        "windowSize": {
-          "width": 660,
-          "height": 400
-        },
-        "appPosition": {
-          "x": 180,
-          "y": 220
-        },
-        "applicationFolderPosition": {
-          "x": 480,
-          "y": 220
-        }
+      "minimumSystemVersion": "12.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/ansxuman/QoriX/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERBM0M5NUI5N0RENTExQ0YKUldUUEVkVjl1WlU4MnR0cXhrMHNtQVF1K3ZHMk9UVmQ3MHU0UWd0L2FWRTBFL0VyZWJnMlA2WVYK"
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["qorix"]
       }
     }
   }
