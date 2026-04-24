@@ -14,7 +14,11 @@
     agentShellOpen,
     agentSessionActivity,
     agentSessions,
+    agentNotifyEnabled,
+    agentSoundEnabled,
+    agentDockBounceEnabled,
   } from '$lib/stores/agent';
+  import { getSetting } from '$lib/commands/settings';
   import {
     agentSpawnTerminal,
     agentSpawnShell,
@@ -45,6 +49,107 @@
 
   // Track current session to detect changes
   let currentSessionId: string | null = null;
+
+  // --- Notification system for action-required prompts ---
+  let notifyOutputBuffer = '';
+  let notifyLastTime = 0;
+  let notifyBufferTimer: ReturnType<typeof setTimeout> | null = null;
+  let notifySoundInterval: ReturnType<typeof setInterval> | null = null;
+
+  const actionPatterns = [
+    /Do you want to proceed/i,
+    /1\.\s*Yes/,
+    /\(y\/n\)/i,
+    /\[Y\/n\]/i,
+    /\[y\/N\]/i,
+    /Press Enter/i,
+    /Allow.*Deny/i,
+    /approve this/i,
+    /permission/i,
+    /Yes, and don.t ask/i,
+  ];
+
+  function checkNotifyBuffer() {
+    const buf = notifyOutputBuffer;
+    notifyOutputBuffer = '';
+    if (!buf) return;
+    if (Date.now() - notifyLastTime < 10000) return;
+    if (document.hasFocus()) return;
+
+    if (actionPatterns.some(p => p.test(buf))) {
+      notifyLastTime = Date.now();
+
+      // macOS notification
+      if (get(agentNotifyEnabled)) {
+        import('@tauri-apps/plugin-notification').then(({ isPermissionGranted, requestPermission, sendNotification }) => {
+          isPermissionGranted().then(granted => {
+            if (!granted) {
+              requestPermission().then(perm => {
+                if (perm === 'granted') sendNotification({ title: 'Clauge', body: 'Claude needs your input' });
+              });
+            } else {
+              sendNotification({ title: 'Clauge', body: 'Claude needs your input' });
+            }
+          });
+        }).catch(() => {});
+      }
+
+      // Dock bounce
+      if (get(agentDockBounceEnabled)) {
+        import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+          getCurrentWindow().requestUserAttention(2);
+        }).catch(() => {});
+      }
+
+      // Sound chime + repeat
+      if (get(agentSoundEnabled)) {
+        playChime();
+        if (notifySoundInterval) clearInterval(notifySoundInterval);
+        notifySoundInterval = setInterval(() => {
+          if (document.hasFocus()) {
+            clearInterval(notifySoundInterval!);
+            notifySoundInterval = null;
+            return;
+          }
+          playChime();
+        }, 3000);
+      }
+    }
+  }
+
+  function playChime() {
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc1.frequency.value = 880;
+      osc2.frequency.value = 1318.5;
+      osc1.type = 'sine';
+      osc2.type = 'sine';
+      gain.gain.value = 0.15;
+      osc1.connect(gain);
+      osc2.connect(gain);
+      gain.connect(ctx.destination);
+      osc1.start();
+      osc2.start();
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+      setTimeout(() => { osc1.stop(); osc2.stop(); ctx.close(); }, 400);
+    } catch (_) {}
+  }
+
+  function handleTerminalOutput(base64Data: string) {
+    try {
+      const raw = atob(base64Data);
+      const text = raw.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+      notifyOutputBuffer += text;
+      if (notifyOutputBuffer.length > 500) notifyOutputBuffer = notifyOutputBuffer.slice(-500);
+
+      if (!document.hasFocus()) checkNotifyBuffer();
+      if (notifyBufferTimer) clearTimeout(notifyBufferTimer);
+      notifyBufferTimer = setTimeout(() => checkNotifyBuffer(), 300);
+    } catch (_) {}
+  }
 
   async function loadWebGLAddon(term: Terminal) {
     try {
@@ -278,6 +383,9 @@
           } catch (_) {}
         }
 
+        // Check for action-required prompts and notify
+        handleTerminalOutput(payload.data);
+
         // Session exit detection — buffer last 500 chars
         if (!entry!._exitBuffer) entry!._exitBuffer = '';
         try {
@@ -433,9 +541,25 @@
     }
   });
 
+  onMount(async () => {
+    // Load notification preferences from settings
+    try {
+      const [notify, sound, dock] = await Promise.all([
+        getSetting('agent_notify_enabled'),
+        getSetting('agent_sound_enabled'),
+        getSetting('agent_dock_bounce_enabled'),
+      ]);
+      agentNotifyEnabled.set(notify === 'true');
+      agentSoundEnabled.set(sound === 'true');
+      agentDockBounceEnabled.set(dock === 'true');
+    } catch (_) {}
+  });
+
   onDestroy(() => {
     unsubSession();
     unsubShell();
+    if (notifyBufferTimer) clearTimeout(notifyBufferTimer);
+    if (notifySoundInterval) clearInterval(notifySoundInterval);
   });
 </script>
 

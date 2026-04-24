@@ -3,7 +3,7 @@
   import { githubConnected, syncing, lastSyncedAt } from '$lib/stores/github';
   import { updateAvailable, showWhatsNewModal } from '$lib/utils/updater';
   import { mode } from '$lib/stores/app';
-  import { agentGitBranchName, agentGitFiles, agentGitAhead, agentGitBehind, agentContextUsage, activeAgentSession } from '$lib/stores/agent';
+  import { agentGitBranchName, agentGitFiles, agentGitAhead, agentGitBehind, agentContextUsage, activeAgentSession, agentUsageLimits } from '$lib/stores/agent';
   import AgentGitPanel from '$lib/components/agent/AgentGitPanel.svelte';
 
   let gitPanelOpen = $state(false);
@@ -43,6 +43,37 @@
     'var(--ok, #4c8)'
   );
 
+  interface UsageChip { label: string; pct: number; color: string; }
+
+  function usageColor(pct: number): string {
+    if (pct >= 85) return 'var(--err, #f44)';
+    if (pct >= 70) return 'var(--warn, #fa0)';
+    return 'var(--ok, #4c8)';
+  }
+
+  let usageChips = $derived.by((): UsageChip[] => {
+    const limits = $agentUsageLimits;
+    if (!limits) return [];
+    const chips: UsageChip[] = [];
+    if (limits.sessionPercent != null) {
+      const pct = Math.round(limits.sessionPercent);
+      chips.push({ label: 'Session', pct, color: usageColor(pct) });
+    }
+    if (limits.weeklyPercent != null) {
+      const pct = Math.round(limits.weeklyPercent);
+      chips.push({ label: 'Weekly', pct, color: usageColor(pct) });
+    }
+    if (limits.sonnetPercent != null) {
+      const pct = Math.round(limits.sonnetPercent);
+      chips.push({ label: 'Sonnet', pct, color: usageColor(pct) });
+    }
+    return chips;
+  });
+
+  function showUsageDashboard() {
+    window.dispatchEvent(new CustomEvent('agent:show-usage-dashboard'));
+  }
+
   function openUpdateModal() {
     showWhatsNewModal.set(true);
   }
@@ -68,6 +99,14 @@
     </div>
   </div>
   <div class="sr">
+    {#each usageChips as chip}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="si usage-chip" style="color:{chip.color}" onclick={showUsageDashboard}>
+        <span class="sled" style="background:{chip.color}"></span>
+        <span>{chip.label} {chip.pct}%</span>
+      </div>
+    {/each}
     {#if appVersion}<div class="si">Clauge v{appVersion}</div>{/if}
   </div>
 </footer>
@@ -174,5 +213,14 @@
   @keyframes updatePulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.4; }
+  }
+  .usage-chip {
+    cursor: pointer;
+    padding: 1px 6px;
+    border-radius: 4px;
+    transition: background 0.1s;
+  }
+  .usage-chip:hover {
+    background: rgba(255,255,255,0.06);
   }
 </style>

@@ -1,6 +1,6 @@
 import { writable, get } from 'svelte/store';
 import type { AgentSession, AgentContext, ContextUsage, GitFileChange } from '$lib/types/agent';
-import { agentListSessions, agentListContexts, agentGitStatus, agentGitBranch, agentGitAheadBehind, agentGetSessionContextUsage } from '$lib/commands/agent';
+import { agentListSessions, agentListContexts, agentGitStatus, agentGitBranch, agentGitAheadBehind, agentGetSessionContextUsage, agentFetchUsageLimits } from '$lib/commands/agent';
 
 // Sessions
 export const agentSessions = writable<AgentSession[]>([]);
@@ -32,6 +32,19 @@ export const agentSessionActivity = writable<Map<string, 'running' | 'done'>>(ne
 export const agentNotifyEnabled = writable<boolean>(false);
 export const agentSoundEnabled = writable<boolean>(false);
 export const agentDockBounceEnabled = writable<boolean>(false);
+
+// Usage limits (fetched from Claude AI API)
+export const agentUsageLimits = writable<any>(null);
+export const agentSessionKey = writable<string>('');
+
+export async function loadAgentUsageLimits() {
+  const key = get(agentSessionKey);
+  if (!key) return;
+  try {
+    const limits = await agentFetchUsageLimits(key);
+    agentUsageLimits.set(limits);
+  } catch { /* ignore */ }
+}
 
 export async function loadAgentSessions() {
   try {

@@ -25,7 +25,9 @@
   import { loadSettings, loadAppearance, appearance } from '$lib/stores/settings';
   import { setConnected, setLastSynced, hasSyncedOnce, markSynced, showSyncRestorePrompt } from '$lib/stores/github';
   import { githubGetStatus, gistCheckExists, gistSyncPush, gistSyncPull } from '$lib/commands/github';
-  import { activeModal, aiPanelOpen } from '$lib/stores/app';
+  import { activeModal, aiPanelOpen, mode } from '$lib/stores/app';
+  import { agentSessionKey, loadAgentUsageLimits } from '$lib/stores/agent';
+  import { getSetting } from '$lib/commands/settings';
   import AIPanel from '$lib/components/ai/AIPanel.svelte';
   import { tabs, addTab, activeTabId } from '$lib/stores/tabs';
   import type { AgentSession } from '$lib/types/agent';
@@ -44,6 +46,7 @@
   let showSaveDialog = $state(false);
   let saveDialogTabId = $state(-1);
   let syncInterval: ReturnType<typeof setInterval> | null = null;
+  let usageLimitsInterval: ReturnType<typeof setInterval> | null = null;
 
   let showNewSessionModal = $state(false);
   let showEditSessionModal = $state(false);
@@ -107,6 +110,7 @@
     window.removeEventListener('agent:new-session', handleAgentNewSession);
     window.removeEventListener('agent:edit-session', handleAgentEditSession);
     if (syncInterval) clearInterval(syncInterval);
+    if (usageLimitsInterval) clearInterval(usageLimitsInterval);
   });
 
   function applyAppearanceOnStartup() {
@@ -240,6 +244,18 @@
     } catch {
       // Updater not available in dev mode
     }
+
+    // Load agent session key and start usage limits polling
+    try {
+      const key = await getSetting('agent_session_key');
+      if (key) {
+        agentSessionKey.set(key);
+        loadAgentUsageLimits();
+        usageLimitsInterval = setInterval(() => {
+          if (get(mode) === 'agent') loadAgentUsageLimits();
+        }, 5 * 60 * 1000);
+      }
+    } catch { /* ignore */ }
   });
 </script>
 
