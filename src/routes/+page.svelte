@@ -1,6 +1,7 @@
 <script lang="ts">
   import { mode } from '$lib/stores/app';
   import { activeHistoryEntry } from '$lib/stores/history';
+  import AgentPanel from '$lib/components/agent/AgentPanel.svelte';
   import RestPanel from '$lib/components/rest/RestPanel.svelte';
   import SqlPanel from '$lib/components/sql/SqlPanel.svelte';
   import NoSqlPanel from '$lib/components/nosql/NoSqlPanel.svelte';
@@ -8,7 +9,9 @@
 </script>
 
 <div class="workspace">
-  {#if $mode === 'history'}
+  {#if $mode === 'agent'}
+    <AgentPanel />
+  {:else if $mode === 'history'}
     {#if $activeHistoryEntry}
       <HistoryViewer />
     {:else}
