@@ -12,6 +12,7 @@
   import { loadAgentSessions, loadAgentContexts } from '$lib/stores/agent';
   import NewSessionModal from '$lib/components/agent/NewSessionModal.svelte';
   import EditSessionModal from '$lib/components/agent/EditSessionModal.svelte';
+  import UsageDashboard from '$lib/components/agent/UsageDashboard.svelte';
   import favicon from '$lib/assets/favicon.svg';
 
   import { onMount, onDestroy } from 'svelte';
@@ -51,10 +52,15 @@
 
   let showNewSessionModal = $state(false);
   let showEditSessionModal = $state(false);
+  let showUsageDashboard = $state(false);
   let editSessionTarget = $state<AgentSession | null>(null);
 
   function handleAgentNewSession() {
     showNewSessionModal = true;
+  }
+
+  function handleAgentShowUsageDashboard() {
+    showUsageDashboard = true;
   }
 
   function handleAgentEditSession(e: Event) {
@@ -110,6 +116,7 @@
     window.removeEventListener('clauge:save-new-request', handleSaveNewRequest);
     window.removeEventListener('agent:new-session', handleAgentNewSession);
     window.removeEventListener('agent:edit-session', handleAgentEditSession);
+    window.removeEventListener('agent:show-usage-dashboard', handleAgentShowUsageDashboard);
     if (syncInterval) clearInterval(syncInterval);
     if (usageLimitsInterval) clearInterval(usageLimitsInterval);
   });
@@ -131,6 +138,7 @@
     window.addEventListener('clauge:save-new-request', handleSaveNewRequest);
     window.addEventListener('agent:new-session', handleAgentNewSession);
     window.addEventListener('agent:edit-session', handleAgentEditSession);
+    window.addEventListener('agent:show-usage-dashboard', handleAgentShowUsageDashboard);
 
     // Apply to existing and future inputs/textareas
     document.querySelectorAll('input, textarea').forEach(disableAutocorrect);
@@ -314,6 +322,7 @@
 />
 <NewSessionModal bind:show={showNewSessionModal} />
 <EditSessionModal bind:show={showEditSessionModal} bind:session={editSessionTarget} />
+<UsageDashboard bind:show={showUsageDashboard} />
 
 <style>
   .app-shell {

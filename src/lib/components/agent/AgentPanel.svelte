@@ -479,7 +479,7 @@
             }
             agentSessionActivity.update(m => { m.set(sessionId, 'done'); return new Map(m); });
 
-            // Auto-switch to next running session (Feature 3)
+            // Auto-switch to next running session, or show empty state
             if (!_suppressExit) {
               const currentActive = get(activeAgentSession);
               if (currentActive?.id === sessionId) {
@@ -488,6 +488,10 @@
                 const nextRunning = sessions.find(s => s.id !== sessionId && activity.get(s.id) === 'running');
                 if (nextRunning) {
                   activeAgentSession.set(nextRunning);
+                } else {
+                  // No running sessions — show empty/default state
+                  currentSessionId = null;
+                  activeAgentSession.set(null);
                 }
               }
             }

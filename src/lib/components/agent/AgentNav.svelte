@@ -203,11 +203,6 @@
       {/if}
     {/each}
   {/if}
-  {#if $agentClaudePlan}
-    <div class="plan-badge-row">
-      <span class="plan-badge">{$agentClaudePlan}</span>
-    </div>
-  {/if}
 </div>
 
 <!-- Confirm Dialog -->
