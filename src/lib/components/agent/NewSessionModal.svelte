@@ -22,10 +22,11 @@
   let selectedSessionId = $state('');
 
   // Context attachment
-  let contextEnabled = $state(false);
   let availableContexts = $state<AgentContext[]>([]);
   let attachedContextIds = $state<string[]>([]);
   let showContextDropdown = $state(false);
+  let showAdvanced = $state(false);
+  let contextsLoaded = $state(false);
 
   const purposes = [
     { name: 'Brainstorming', color: '#d2a8ff' },
@@ -108,9 +109,10 @@
     resumeEnabled = false;
     discoveredSessions = [];
     selectedSessionId = '';
-    contextEnabled = false;
     attachedContextIds = [];
     showContextDropdown = false;
+    showAdvanced = false;
+    contextsLoaded = false;
   }
 </script>
 
@@ -189,71 +191,68 @@
       </label>
     {/if}
 
-    <label class="ns-check">
-      <input type="checkbox" bind:checked={skipPermissions} />
-      <span>Skip permission prompts</span>
-    </label>
-
-    <div class="ns-section">
-      <span class="ns-section-title">Git Identity (optional)</span>
-      <div class="ns-row">
-        <label class="ns-field" style="flex:1">
-          <span class="ns-label">Name</span>
-          <input class="ns-input" type="text" bind:value={gitName} placeholder="John Doe" />
-        </label>
-        <label class="ns-field" style="flex:1">
-          <span class="ns-label">Email</span>
-          <input class="ns-input" type="text" bind:value={gitEmail} placeholder="john@example.com" />
-        </label>
-      </div>
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="ns-advanced-toggle" onclick={() => { showAdvanced = !showAdvanced; if (showAdvanced && !contextsLoaded) { loadContexts(); contextsLoaded = true; } }}>
+      <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" style="transform:rotate({showAdvanced ? 90 : 0}deg);transition:transform 0.15s"><path d="M6 4l4 4-4 4"/></svg>
+      <span>Advanced Options</span>
     </div>
 
-    <div class="ns-section">
-      <div class="ns-section-header">
-        <span class="ns-section-title">Attach Contexts</span>
-        <label class="ns-check" style="margin:0">
-          <input type="checkbox" bind:checked={contextEnabled} onchange={() => { if (contextEnabled) loadContexts(); }} />
-        </label>
+    {#if showAdvanced}
+    <div class="ns-advanced-body">
+      <label class="ns-check">
+        <input type="checkbox" bind:checked={skipPermissions} />
+        <span>Skip permission prompts</span>
+      </label>
+
+      <div class="ns-field">
+        <span class="ns-label">Git Identity (optional)</span>
+        <div class="ns-row">
+          <input class="ns-input" style="flex:1" type="text" bind:value={gitName} placeholder="Name" />
+          <input class="ns-input" style="flex:1" type="text" bind:value={gitEmail} placeholder="Email" />
+        </div>
       </div>
-      {#if contextEnabled}
-        <div class="ns-ctx-area">
-          {#if attachedContextIds.length > 0}
-            <div class="ns-ctx-chips">
-              {#each attachedContextIds as cid}
-                {@const ctx = availableContexts.find(c => c.id === cid)}
-                {#if ctx}
-                  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-                  <span class="ns-ctx-chip">
-                    {ctx.name}
-                    <span class="ns-ctx-chip-x" onclick={() => { attachedContextIds = attachedContextIds.filter(id => id !== cid); }}>x</span>
-                  </span>
-                {/if}
+
+      <div class="ns-field">
+        <span class="ns-label">Attach Contexts</span>
+      </div>
+      <div class="ns-ctx-area">
+        {#if attachedContextIds.length > 0}
+          <div class="ns-ctx-chips">
+            {#each attachedContextIds as cid}
+              {@const ctx = availableContexts.find(c => c.id === cid)}
+              {#if ctx}
+                <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+                <span class="ns-ctx-chip">
+                  {ctx.name}
+                  <span class="ns-ctx-chip-x" onclick={() => { attachedContextIds = attachedContextIds.filter(id => id !== cid); }}>x</span>
+                </span>
+              {/if}
+            {/each}
+          </div>
+        {/if}
+        <div class="ns-ctx-add-wrap">
+          <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+          <button class="ns-ctx-add-btn" onclick={(e) => { e.stopPropagation(); showContextDropdown = !showContextDropdown; }}>
+            <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M7.75 2a.75.75 0 01.75.75V7h4.25a.75.75 0 010 1.5H8.5v4.25a.75.75 0 01-1.5 0V8.5H2.75a.75.75 0 010-1.5H7V2.75A.75.75 0 017.75 2z"/></svg>
+            Add Context
+          </button>
+          {#if showContextDropdown}
+            <div class="ns-ctx-dropdown">
+              {#each availableContexts.filter(c => !attachedContextIds.includes(c.id)) as ctx}
+                <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+                <div class="ns-ctx-dropdown-item" onclick={() => { attachedContextIds = [...attachedContextIds, ctx.id]; showContextDropdown = false; }}>
+                  <span class="ns-ctx-dropdown-name">{ctx.name}</span>
+                  <span class="ns-ctx-dropdown-preview">{ctx.content.slice(0, 60)}</span>
+                </div>
+              {:else}
+                <div class="ns-ctx-dropdown-empty">No contexts saved yet</div>
               {/each}
             </div>
           {/if}
-          <div class="ns-ctx-add-wrap">
-            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-            <button class="ns-ctx-add-btn" onclick={(e) => { e.stopPropagation(); showContextDropdown = !showContextDropdown; }}>
-              <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M7.75 2a.75.75 0 01.75.75V7h4.25a.75.75 0 010 1.5H8.5v4.25a.75.75 0 01-1.5 0V8.5H2.75a.75.75 0 010-1.5H7V2.75A.75.75 0 017.75 2z"/></svg>
-              Add
-            </button>
-            {#if showContextDropdown}
-              <div class="ns-ctx-dropdown">
-                {#each availableContexts.filter(c => !attachedContextIds.includes(c.id)) as ctx}
-                  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-                  <div class="ns-ctx-dropdown-item" onclick={() => { attachedContextIds = [...attachedContextIds, ctx.id]; showContextDropdown = false; }}>
-                    <span class="ns-ctx-dropdown-name">{ctx.name}</span>
-                    <span class="ns-ctx-dropdown-preview">{ctx.content.slice(0, 60)}</span>
-                  </div>
-                {:else}
-                  <div class="ns-ctx-dropdown-empty">No more contexts available</div>
-                {/each}
-              </div>
-            {/if}
-          </div>
         </div>
-      {/if}
+      </div>
     </div>
+    {/if}
 
     <div class="ns-actions">
       <button class="ns-btn outline" onclick={() => show = false}>Cancel</button>
@@ -273,6 +272,29 @@
     display: flex;
     flex-direction: column;
     gap: 14px;
+  }
+  .ns-advanced-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--t3);
+    font-family: var(--ui);
+    cursor: default;
+    padding: 4px 0;
+    user-select: none;
+  }
+  .ns-advanced-toggle:hover {
+    color: var(--t2);
+  }
+  .ns-advanced-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--b1);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--n) 50%, transparent);
   }
   .ns-field {
     display: flex;

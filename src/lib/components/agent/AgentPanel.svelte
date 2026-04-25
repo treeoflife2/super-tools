@@ -33,6 +33,8 @@
     agentListSessions,
   } from '$lib/commands/agent';
   import { refreshAgentGitStatus, loadAgentSessions } from '$lib/stores/agent';
+  import { getTerminalTheme } from '$lib/utils/theme';
+  import { appearance } from '$lib/stores/settings';
 
   let terminalEl: HTMLDivElement;
   let shellEl: HTMLDivElement;
@@ -160,14 +162,19 @@
     } catch (_) {} // Falls back to canvas renderer silently
   }
 
+  function getCurrentTermTheme(): Record<string, string> {
+    const app = get(appearance);
+    return getTerminalTheme(app.theme, app.accentColor);
+  }
+
   function createTermEntry(sessionId: string): { term: Terminal; fitAddon: FitAddon; container: HTMLDivElement; terminalId: string | null; _exitBuffer?: string } {
     const t = new Terminal({
       cursorBlink: true,
       fontSize: 13,
-      fontFamily: 'JetBrains Mono, monospace',
-      theme: { background: 'transparent' },
-      allowTransparency: true,
+      fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", "Menlo", monospace',
+      theme: getCurrentTermTheme(),
       scrollback: 10000,
+      lineHeight: 1.35,
     });
     const fa = new FitAddon();
     t.loadAddon(fa);
@@ -213,10 +220,10 @@
     const t = new Terminal({
       cursorBlink: true,
       fontSize: 13,
-      fontFamily: 'JetBrains Mono, monospace',
-      theme: { background: 'transparent' },
-      allowTransparency: true,
+      fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", "Menlo", monospace',
+      theme: getCurrentTermTheme(),
       scrollback: 5000,
+      lineHeight: 1.35,
     });
     const fa = new FitAddon();
     t.loadAddon(fa);
@@ -534,6 +541,20 @@
     document.addEventListener('mouseup', onUp);
   }
 
+  // React to theme changes — update all terminal instances
+  const unsubAppearance = appearance.subscribe((app) => {
+    if (!app) return;
+    const termTheme = getTerminalTheme(app.theme, app.accentColor);
+    const tMap = get(agentTerminalMap);
+    for (const [, entry] of tMap) {
+      if (entry?.term) entry.term.options.theme = termTheme;
+    }
+    const sMap = get(agentShellMap);
+    for (const [, entry] of sMap) {
+      if (entry?.term) entry.term.options.theme = termTheme;
+    }
+  });
+
   // React to session changes
   const unsubSession = activeAgentSession.subscribe((session) => {
     if (session && session.id !== currentSessionId) {
@@ -588,6 +609,7 @@
   onDestroy(() => {
     unsubSession();
     unsubShell();
+    unsubAppearance();
     if (notifyBufferTimer) clearTimeout(notifyBufferTimer);
     if (notifySoundInterval) clearInterval(notifySoundInterval);
   });

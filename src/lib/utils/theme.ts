@@ -180,6 +180,74 @@ export async function setVibrancy(material: string) {
   }
 }
 
+// xterm.js terminal themes matched to each app theme
+export const TERMINAL_THEMES: Record<string, Record<string, string>> = {
+  'dark-glass': {
+    background: '#0d0d18',
+    foreground: '#e8e8f4',
+    cursor: '#6366f1',
+    cursorAccent: '#0d0d18',
+    selectionBackground: 'rgba(99,102,241,0.3)',
+    black: '#484858', red: '#ff7b72', green: '#3fb950', yellow: '#d29922',
+    blue: '#58a6ff', magenta: '#d2a8ff', cyan: '#56d4dd', white: '#e6edf3',
+    brightBlack: '#6e7681', brightRed: '#ffa198', brightGreen: '#56d364', brightYellow: '#e3b341',
+    brightBlue: '#79c0ff', brightMagenta: '#d2a8ff', brightCyan: '#76e4f7', brightWhite: '#ffffff',
+  },
+  'dark-solid': {
+    background: '#12121f',
+    foreground: '#e4e4f0',
+    cursor: '#6366f1',
+    cursorAccent: '#12121f',
+    selectionBackground: 'rgba(99,102,241,0.3)',
+    black: '#484858', red: '#ff7b72', green: '#3fb950', yellow: '#d29922',
+    blue: '#58a6ff', magenta: '#d2a8ff', cyan: '#56d4dd', white: '#e6edf3',
+    brightBlack: '#6e7681', brightRed: '#ffa198', brightGreen: '#56d364', brightYellow: '#e3b341',
+    brightBlue: '#79c0ff', brightMagenta: '#d2a8ff', brightCyan: '#76e4f7', brightWhite: '#ffffff',
+  },
+  'midnight': {
+    background: '#000000',
+    foreground: '#e8e8e8',
+    cursor: '#6366f1',
+    cursorAccent: '#000000',
+    selectionBackground: 'rgba(99,102,241,0.25)',
+    black: '#3a3a3a', red: '#ff7b72', green: '#3fb950', yellow: '#d29922',
+    blue: '#58a6ff', magenta: '#d2a8ff', cyan: '#56d4dd', white: '#e8e8e8',
+    brightBlack: '#666666', brightRed: '#ffa198', brightGreen: '#56d364', brightYellow: '#e3b341',
+    brightBlue: '#79c0ff', brightMagenta: '#d2a8ff', brightCyan: '#76e4f7', brightWhite: '#ffffff',
+  },
+  'nord': {
+    background: '#2e3440',
+    foreground: '#eceff4',
+    cursor: '#88c0d0',
+    cursorAccent: '#2e3440',
+    selectionBackground: 'rgba(136,192,208,0.25)',
+    black: '#3b4252', red: '#bf616a', green: '#a3be8c', yellow: '#ebcb8b',
+    blue: '#81a1c1', magenta: '#b48ead', cyan: '#88c0d0', white: '#eceff4',
+    brightBlack: '#4c566a', brightRed: '#bf616a', brightGreen: '#a3be8c', brightYellow: '#ebcb8b',
+    brightBlue: '#81a1c1', brightMagenta: '#b48ead', brightCyan: '#8fbcbb', brightWhite: '#eceff4',
+  },
+  'light': {
+    background: '#ffffff',
+    foreground: '#1a1a18',
+    cursor: '#6366f1',
+    cursorAccent: '#ffffff',
+    selectionBackground: 'rgba(99,102,241,0.15)',
+    black: '#24292f', red: '#cf222e', green: '#116329', yellow: '#4d2d00',
+    blue: '#0550ae', magenta: '#8250df', cyan: '#1b7c83', white: '#6e7781',
+    brightBlack: '#57606a', brightRed: '#a40e26', brightGreen: '#1a7f37', brightYellow: '#633c01',
+    brightBlue: '#0969da', brightMagenta: '#8250df', brightCyan: '#3192aa', brightWhite: '#24292f',
+  },
+};
+
+/** Get xterm theme for a given app theme, with accent color as cursor */
+export function getTerminalTheme(themeId: string, accentColor?: string): Record<string, string> {
+  const termTheme = TERMINAL_THEMES[themeId] || TERMINAL_THEMES['dark-glass'];
+  if (accentColor) {
+    return { ...termTheme, cursor: accentColor };
+  }
+  return { ...termTheme };
+}
+
 // Method colors for HTTP methods
 export const METHOD_COLORS: Record<string, { color: string; bg: string }> = {
   GET:    { color: '#60a5fa', bg: '#162640' },
