@@ -862,11 +862,12 @@
   </div>
 {:else}
   <div class="agent-empty">
-    <svg viewBox="0 0 24 24" width="36" height="36">
-      <rect x="3" y="3" width="18" height="18" rx="3" stroke="var(--t4)" fill="none" stroke-width="1.2"/>
-      <path d="M7 8h10M7 12h6M7 16h8" stroke="var(--t4)" fill="none" stroke-width="1.2" stroke-linecap="round"/>
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--t4)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="4 17 10 11 4 5"></polyline>
+      <line x1="12" y1="19" x2="20" y2="19"></line>
     </svg>
-    <span>Select or create a session to start</span>
+    <p class="empty-title">No active session</p>
+    <p class="empty-sub">Create a new session or select one from the sidebar</p>
   </div>
 {/if}
 
@@ -924,9 +925,19 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 12px;
-    color: var(--t3);
-    font-size: 13px;
+    gap: 10px;
+  }
+  .empty-title {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--t2);
     font-family: var(--ui);
+    margin: 0;
+  }
+  .empty-sub {
+    font-size: 13px;
+    color: var(--t3);
+    font-family: var(--ui);
+    margin: 0;
   }
 </style>
