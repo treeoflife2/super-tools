@@ -1,11 +1,12 @@
 import { writable } from 'svelte/store';
 import type { AppearanceConfig } from '$lib/types';
 import * as cmd from '$lib/commands';
+import { DEFAULT_ACCENT_COLOR } from '$lib/shared/constants/colors';
 
 export const settings = writable<Record<string, string>>({});
 export const appearance = writable<AppearanceConfig>({
   theme: 'dark-glass',
-  accentColor: '#6366f1',
+  accentColor: DEFAULT_ACCENT_COLOR,
 });
 
 export async function loadSettings() {

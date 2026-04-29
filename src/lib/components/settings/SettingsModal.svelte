@@ -21,6 +21,13 @@
   } from '$lib/commands/agent';
   import type { ClaudePlugin, MarketplacePlugin, AgentContext, UsageAnalytics } from '$lib/types/agent';
   import { agentUsageLimits } from '$lib/stores/agent';
+  import {
+    ACCENT_PALETTE,
+    THEME_PREVIEW_COLORS,
+    FALLBACK_ACCENT_COLOR,
+    USAGE_DANGER,
+    USAGE_WARN,
+  } from '$lib/shared/constants/colors';
 
   type SettingsTab = 'general' | 'appearance' | 'ai' | 'agent' | 'proxy' | 'shortcuts' | 'about';
 
@@ -86,18 +93,10 @@
 
   // --- Appearance ---
   let currentTheme = $derived($appearance.theme || 'dark-glass');
-  let accentColor = $derived($appearance.accentColor || '#7c5cf8');
+  let accentColor = $derived($appearance.accentColor || FALLBACK_ACCENT_COLOR);
 
-  const ACCENT_COLORS = [
-    { name: 'Purple', value: '#7c5cf8' },
-    { name: 'Blue', value: '#4f94d4' },
-    { name: 'Green', value: '#1dc880' },
-    { name: 'Orange', value: '#f06830' },
-    { name: 'Red', value: '#f04444' },
-    { name: 'Pink', value: '#f472b6' },
-    { name: 'Cyan', value: '#22d3ee' },
-    { name: 'White', value: '#e0e0e0' },
-  ];
+  // Re-export for template usage (Svelte each blocks resolve from script scope).
+  const ACCENT_COLORS = ACCENT_PALETTE;
 
   const THEME_DESCRIPTIONS: Record<string, string> = {
     'dark-glass': 'Transparent with macOS vibrancy',
@@ -105,14 +104,6 @@
     'midnight': 'Pure black, zero distraction',
     'nord': 'Arctic blue-gray palette',
     'light': 'Warm off-white, easy on the eyes',
-  };
-
-  const THEME_PREVIEW_COLORS: Record<string, string[]> = {
-    'dark-glass': ['rgba(7,7,15,0.55)', 'rgba(13,13,24,0.72)', 'rgba(19,19,32,0.82)'],
-    'dark-solid': ['#0a0a14', '#0f0f1a', '#16162a'],
-    'midnight': ['#000000', '#080808', '#0a0a0a'],
-    'nord': ['#2e3440', '#3b4252', '#353d4b'],
-    'light': ['#f0f0ec', '#f5f5f2', '#fafaf8'],
   };
 
 
@@ -330,8 +321,8 @@
   ];
 
   function agentLiveColor(pct: number): string {
-    if (pct > 80) return '#f85149';
-    if (pct > 50) return '#d29922';
+    if (pct > 80) return USAGE_DANGER;
+    if (pct > 50) return USAGE_WARN;
     return 'var(--acc)';
   }
 

@@ -6,6 +6,7 @@
   import { agentGitBranchName, agentGitFiles, agentGitAhead, agentGitBehind, activeAgentSession, agentUsageLimits, agentShellOpen, agentSessionKey } from '$lib/stores/agent';
   import { activeModal } from '$lib/stores/app';
   import AgentGitPanel from '$lib/components/agent/AgentGitPanel.svelte';
+  import { USAGE_DANGER, USAGE_WARN } from '$lib/shared/constants/colors';
 
   let gitPanelOpen = $state(false);
 
@@ -34,8 +35,8 @@
   interface UsageChip { label: string; pct: number; color: string; }
 
   function usageColor(pct: number): string {
-    if (pct > 80) return '#f85149';
-    if (pct > 50) return '#d29922';
+    if (pct > 80) return USAGE_DANGER;
+    if (pct > 50) return USAGE_WARN;
     return 'var(--acc)';
   }
 

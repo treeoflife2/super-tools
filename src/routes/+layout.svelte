@@ -44,6 +44,9 @@
   import UpdateNotification from '$lib/components/shared/UpdateNotification.svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { get } from 'svelte/store';
+  import { SSH_EVENT, AGENT_EVENT, APP_EVENT } from '$lib/shared/constants/events';
+  import { PERIODIC_SYNC_INTERVAL_MS, USAGE_LIMITS_POLL_INTERVAL_MS, SPLASH_FADE_OUT_MS } from '$lib/shared/constants/timings';
+  import { DEFAULT_ACCENT_COLOR } from '$lib/shared/constants/colors';
 
   let { children } = $props();
 
@@ -86,7 +89,7 @@
     if (detail?.y) pickerY = detail.y;
     const sessions = get(agentSessions);
     if (sessions.length === 0) {
-      window.dispatchEvent(new CustomEvent('agent:new-session'));
+      window.dispatchEvent(new CustomEvent(AGENT_EVENT.NEW_SESSION));
     } else {
       showSessionPicker = true;
     }
@@ -106,7 +109,7 @@
 
   function pickerNewSession() {
     showSessionPicker = false;
-    window.dispatchEvent(new CustomEvent('agent:new-session'));
+    window.dispatchEvent(new CustomEvent(AGENT_EVENT.NEW_SESSION));
   }
 
   // SSH "+ tab" handler — mirrors agent. No profiles → open create modal,
@@ -120,7 +123,7 @@
       try { await loadSshProfiles(); } catch { /* ignore */ }
     }
     if (get(sshProfiles).length === 0) {
-      window.dispatchEvent(new CustomEvent('ssh:new-profile'));
+      window.dispatchEvent(new CustomEvent(SSH_EVENT.NEW_PROFILE));
     } else {
       showSshPicker = true;
     }
@@ -128,13 +131,13 @@
 
   function openSshTabFromPicker(profile: SshProfile) {
     activeSshProfile.set(profile);
-    window.dispatchEvent(new CustomEvent('ssh:open-tab', { detail: profile }));
+    window.dispatchEvent(new CustomEvent(SSH_EVENT.OPEN_TAB, { detail: profile }));
     showSshPicker = false;
   }
 
   function pickerNewSshProfile() {
     showSshPicker = false;
-    window.dispatchEvent(new CustomEvent('ssh:new-profile'));
+    window.dispatchEvent(new CustomEvent(SSH_EVENT.NEW_PROFILE));
   }
 
   const PURPOSE_COLORS: Record<string, string> = {
@@ -188,19 +191,19 @@
 
   onDestroy(() => {
     teardownGlobalShortcuts();
-    window.removeEventListener('clauge:save-new-request', handleSaveNewRequest);
-    window.removeEventListener('agent:new-session', handleAgentNewSession);
-    window.removeEventListener('agent:edit-session', handleAgentEditSession);
-    window.removeEventListener('agent:show-usage-dashboard', handleAgentShowUsageDashboard);
-    window.removeEventListener('agent:add-tab', handleAgentAddTab);
-    window.removeEventListener('ssh:add-tab', handleSshAddTab);
+    window.removeEventListener(APP_EVENT.SAVE_NEW_REQUEST, handleSaveNewRequest);
+    window.removeEventListener(AGENT_EVENT.NEW_SESSION, handleAgentNewSession);
+    window.removeEventListener(AGENT_EVENT.EDIT_SESSION, handleAgentEditSession);
+    window.removeEventListener(AGENT_EVENT.SHOW_USAGE_DASHBOARD, handleAgentShowUsageDashboard);
+    window.removeEventListener(AGENT_EVENT.ADD_TAB, handleAgentAddTab);
+    window.removeEventListener(SSH_EVENT.ADD_TAB, handleSshAddTab);
     if (syncInterval) clearInterval(syncInterval);
     if (usageLimitsInterval) clearInterval(usageLimitsInterval);
   });
 
   function applyAppearanceOnStartup() {
     const config = get(appearance);
-    applyTheme(config.theme || 'dark-glass', config.accentColor || '#6366f1');
+    applyTheme(config.theme || 'dark-glass', config.accentColor || DEFAULT_ACCENT_COLOR);
   }
 
   // Disable macOS autocorrect/autocapitalize on all inputs
@@ -216,16 +219,16 @@
       const splash = document.getElementById('clauge-splash');
       if (splash) {
         splash.classList.add('fade-out');
-        setTimeout(() => splash.remove(), 300);
+        setTimeout(() => splash.remove(), SPLASH_FADE_OUT_MS);
       }
     });
     setupGlobalShortcuts();
-    window.addEventListener('clauge:save-new-request', handleSaveNewRequest);
-    window.addEventListener('agent:new-session', handleAgentNewSession);
-    window.addEventListener('agent:edit-session', handleAgentEditSession);
-    window.addEventListener('agent:show-usage-dashboard', handleAgentShowUsageDashboard);
-    window.addEventListener('agent:add-tab', handleAgentAddTab);
-    window.addEventListener('ssh:add-tab', handleSshAddTab);
+    window.addEventListener(APP_EVENT.SAVE_NEW_REQUEST, handleSaveNewRequest);
+    window.addEventListener(AGENT_EVENT.NEW_SESSION, handleAgentNewSession);
+    window.addEventListener(AGENT_EVENT.EDIT_SESSION, handleAgentEditSession);
+    window.addEventListener(AGENT_EVENT.SHOW_USAGE_DASHBOARD, handleAgentShowUsageDashboard);
+    window.addEventListener(AGENT_EVENT.ADD_TAB, handleAgentAddTab);
+    window.addEventListener(SSH_EVENT.ADD_TAB, handleSshAddTab);
 
     // Apply to existing and future inputs/textareas
     document.querySelectorAll('input, textarea').forEach(disableAutocorrect);
@@ -325,7 +328,7 @@
           } catch (e) {
             console.error('[Clauge Sync] Periodic push failed:', e);
           }
-        }, 5 * 60 * 1000);
+        }, PERIODIC_SYNC_INTERVAL_MS);
       }
     } catch (e) {
       console.warn('GitHub status check failed:', e);
@@ -354,7 +357,7 @@
         loadAgentUsageLimits();
         usageLimitsInterval = setInterval(() => {
           if (get(mode) === 'agent') loadAgentUsageLimits();
-        }, 5 * 60 * 1000);
+        }, USAGE_LIMITS_POLL_INTERVAL_MS);
       }
     } catch { /* ignore */ }
   });
