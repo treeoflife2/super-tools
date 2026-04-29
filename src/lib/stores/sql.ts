@@ -1,6 +1,7 @@
 import { writable, derived, get } from 'svelte/store';
 import type { SqlConnection, SqlConnectionConfig, TableInfo, SqlQueryResult, SqlResultEntry, SqlScript } from '$lib/types/sql';
 import * as sqlCmd from '$lib/commands/sql_client';
+import { getSqlRowLimit, setSqlRowLimit } from '$lib/shared/constants/storage';
 
 export const connections = writable<SqlConnection[]>([]);
 export const activeConnectionId = writable<string | null>(null);
@@ -28,13 +29,11 @@ export const sqlIsConnected = derived(
     $activeConnectionId ? $connectedIds.has($activeConnectionId) : false
 );
 
-// Default row limit for SELECT queries (0 = no limit)
-const savedLimit = typeof localStorage !== 'undefined' ? localStorage.getItem('sqlRowLimit') : null;
-const parsedLimit = savedLimit ? parseInt(savedLimit, 10) : 100;
-export const sqlRowLimit = writable<number>(Number.isFinite(parsedLimit) && parsedLimit >= 0 ? parsedLimit : 100);
-sqlRowLimit.subscribe(v => {
-  if (typeof localStorage !== 'undefined') localStorage.setItem('sqlRowLimit', String(v));
-});
+// Default row limit for SELECT queries (0 = no limit).
+// `getSqlRowLimit` migrates the legacy `sqlRowLimit` key on first read.
+const SQL_ROW_LIMIT_DEFAULT = 100;
+export const sqlRowLimit = writable<number>(getSqlRowLimit(SQL_ROW_LIMIT_DEFAULT));
+sqlRowLimit.subscribe(v => setSqlRowLimit(v));
 
 // Event for inserting query from nav tree or AI
 export const insertQueryText = writable<string>('');

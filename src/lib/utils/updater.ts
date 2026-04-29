@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import { STORAGE_KEYS } from '$lib/shared/constants/storage';
 
 let updateReadyData: { version: string; body: string } | null = null;
 let pendingUpdate: any = null;
@@ -71,7 +72,7 @@ export function getUpdateReady(): { version: string; body: string } | null {
  */
 export async function checkWhatsNew(currentVersion: string): Promise<{ version: string; body: string } | null> {
   const lastSeen = typeof localStorage !== 'undefined'
-    ? localStorage.getItem('clauge_last_seen_version')
+    ? localStorage.getItem(STORAGE_KEYS.LAST_SEEN_VERSION)
     : null;
 
   if (lastSeen && lastSeen !== currentVersion) {
@@ -86,7 +87,7 @@ export async function checkWhatsNew(currentVersion: string): Promise<{ version: 
           whatsNewContent.set(info);
           showWhatsNewModal.set(true);
           if (typeof localStorage !== 'undefined') {
-            localStorage.setItem('clauge_last_seen_version', currentVersion);
+            localStorage.setItem(STORAGE_KEYS.LAST_SEEN_VERSION, currentVersion);
           }
           return info;
         }
@@ -95,7 +96,7 @@ export async function checkWhatsNew(currentVersion: string): Promise<{ version: 
   }
 
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem('clauge_last_seen_version', currentVersion);
+    localStorage.setItem(STORAGE_KEYS.LAST_SEEN_VERSION, currentVersion);
   }
   return null;
 }

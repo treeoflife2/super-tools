@@ -1,6 +1,7 @@
 import { writable, get } from 'svelte/store';
 import type { Collection, Request, RequestWithDetails, RequestUpdate, KVInput, HttpResponse } from '$lib/types';
 import * as cmd from '$lib/commands';
+import { STORAGE_KEYS } from '$lib/shared/constants/storage';
 
 export const collections = writable<Collection[]>([]);
 export const collectionsRefreshTrigger = writable(0);
@@ -11,7 +12,7 @@ export const activeRequest = writable<RequestWithDetails | null>(null);
 export const currentRestResponse = writable<HttpResponse | null>(null);
 
 /** Per-request environment overrides (requestId/tabId -> envId) */
-const savedOverrides = typeof localStorage !== 'undefined' ? JSON.parse(localStorage.getItem('clauge_request_env_overrides') || '{}') : {};
+const savedOverrides = typeof localStorage !== 'undefined' ? JSON.parse(localStorage.getItem(STORAGE_KEYS.REQUEST_ENV_OVERRIDES) || '{}') : {};
 export const requestEnvOverrides = writable<Record<string, string>>(savedOverrides);
 // Keep old name as alias for backward compatibility during migration
 export const collectionEnvOverrides = requestEnvOverrides;
@@ -110,7 +111,7 @@ export function setRequestEnv(requestOrTabId: string, envId: string | null) {
       next = { ...map, [requestOrTabId]: envId };
     }
     if (typeof localStorage !== 'undefined') {
-      localStorage.setItem('clauge_request_env_overrides', JSON.stringify(next));
+      localStorage.setItem(STORAGE_KEYS.REQUEST_ENV_OVERRIDES, JSON.stringify(next));
     }
     return next;
   });
