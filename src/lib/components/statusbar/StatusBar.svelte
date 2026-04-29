@@ -3,9 +3,9 @@
   import { githubConnected, syncing, lastSyncedAt } from '$lib/stores/github';
   import { updateAvailable, showWhatsNewModal } from '$lib/utils/updater';
   import { mode } from '$lib/stores/app';
-  import { agentGitBranchName, agentGitFiles, agentGitAhead, agentGitBehind, activeAgentSession, agentUsageLimits, agentShellOpen, agentSessionKey } from '$lib/stores/agent';
+  import { agentGitBranchName, agentGitFiles, agentGitAhead, agentGitBehind, activeAgentSession, agentUsageLimits, agentShellOpen, agentSessionKey } from '$lib/modes/agent/stores';
   import { activeModal } from '$lib/stores/app';
-  import AgentGitPanel from '$lib/components/agent/AgentGitPanel.svelte';
+  import AgentGitPanel from '$lib/modes/agent/components/AgentGitPanel.svelte';
   import { USAGE_DANGER, USAGE_WARN } from '$lib/shared/constants/colors';
 
   let gitPanelOpen = $state(false);

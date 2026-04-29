@@ -94,7 +94,7 @@ function handleKeydown(e: KeyboardEvent) {
         activateTab(tab.id);
         // For agent tabs, also set active session
         if (tab.mode === 'agent' && tab.key) {
-          import('$lib/stores/agent').then(({ agentSessions, activeAgentSession }) => {
+          import('$lib/modes/agent/stores').then(({ agentSessions, activeAgentSession }) => {
             const sessions = get(agentSessions);
             const session = sessions.find((s: any) => s.id === tab.key);
             if (session) activeAgentSession.set(session);
@@ -115,7 +115,7 @@ function handleKeydown(e: KeyboardEvent) {
     const currentMode = get(mode);
     if (currentMode === 'agent') {
       // In agent mode, Cmd+L toggles the shell panel (only if a session is active)
-      import('$lib/stores/agent').then(({ agentShellOpen, activeAgentSession }) => {
+      import('$lib/modes/agent/stores').then(({ agentShellOpen, activeAgentSession }) => {
         let hasSession = false;
         const unsub = activeAgentSession.subscribe(s => { hasSession = !!s; });
         unsub();

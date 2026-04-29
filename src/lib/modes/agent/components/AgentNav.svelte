@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { agentSessions, activeAgentSession, agentContextUsage, agentSessionActivity, agentClaudePlan } from '$lib/stores/agent';
+  import { agentSessions, activeAgentSession, agentContextUsage, agentSessionActivity, agentClaudePlan } from '../stores';
   import { mode } from '$lib/stores/app';
   import { showContextMenu } from '$lib/components/shared/contextmenu';
   import { showToast } from '$lib/components/shared/toast';
-  import type { AgentSession } from '$lib/types/agent';
+  import type { AgentSession } from '../types';
   import { tabs, addTab, activateTab } from '$lib/shared/stores/tabs';
   import { get } from 'svelte/store';
   import { AGENT_EVENT } from '$lib/shared/constants/events';

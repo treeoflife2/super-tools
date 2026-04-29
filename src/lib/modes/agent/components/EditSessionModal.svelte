@@ -1,9 +1,9 @@
 <script lang="ts">
   import Modal from '$lib/components/shared/Modal.svelte';
-  import { agentUpdateSession, agentListContexts, agentGetSessionContexts, agentAttachContext, agentDetachContext } from '$lib/commands/agent';
-  import { loadAgentSessions, activeAgentSession } from '$lib/stores/agent';
+  import { agentUpdateSession, agentListContexts, agentGetSessionContexts, agentAttachContext, agentDetachContext } from '../commands';
+  import { loadAgentSessions, activeAgentSession } from '../stores';
   import { showToast } from '$lib/components/shared/toast';
-  import type { AgentSession, AgentContext } from '$lib/types/agent';
+  import type { AgentSession, AgentContext } from '../types';
   import { AGENT_EVENT } from '$lib/shared/constants/events';
 
   let { show = $bindable(false), session = $bindable<AgentSession | null>(null) } = $props();

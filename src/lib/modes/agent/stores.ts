@@ -1,6 +1,6 @@
 import { writable, get } from 'svelte/store';
-import type { AgentSession, AgentContext, ContextUsage, GitFileChange } from '$lib/types/agent';
-import { agentListSessions, agentListContexts, agentGitStatus, agentGitBranch, agentGitAheadBehind, agentGetSessionContextUsage, agentFetchUsageLimits, agentUpdateTrayTitle, agentGetClaudePlan } from '$lib/commands/agent';
+import type { AgentSession, AgentContext, ContextUsage, GitFileChange } from './types';
+import { agentListSessions, agentListContexts, agentGitStatus, agentGitBranch, agentGitAheadBehind, agentGetSessionContextUsage, agentFetchUsageLimits, agentUpdateTrayTitle, agentGetClaudePlan } from './commands';
 
 // Sessions
 export const agentSessions = writable<AgentSession[]>([]);

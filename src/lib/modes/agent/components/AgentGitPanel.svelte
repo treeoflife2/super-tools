@@ -1,13 +1,13 @@
 <script lang="ts">
   import { get } from 'svelte/store';
-  import { activeAgentSession, agentGitFiles, agentGitBranchName, agentGitAhead, agentGitBehind, refreshAgentGitStatus } from '$lib/stores/agent';
+  import { activeAgentSession, agentGitFiles, agentGitBranchName, agentGitAhead, agentGitBehind, refreshAgentGitStatus } from '../stores';
   import {
     agentGitStatus, agentGitCommit, agentGitPush, agentGitPull,
     agentGitDiffFile, agentGitStageFile, agentGitUnstageFile,
     agentGitLog, agentGitStash, agentGitStashPop,
     agentGitListBranches, agentGitSwitchBranch,
-  } from '$lib/commands/agent';
-  import type { GitFileChange } from '$lib/types/agent';
+  } from '../commands';
+  import type { GitFileChange } from '../types';
   import { STATUS_MESSAGE_MS } from '$lib/shared/constants/timings';
 
   let { open = $bindable(false) } = $props();

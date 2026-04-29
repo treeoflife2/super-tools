@@ -1,8 +1,8 @@
 <script lang="ts">
   import Modal from '$lib/components/shared/Modal.svelte';
-  import { agentCreateSession, agentDiscoverSessions, agentListContexts, agentAttachContext, agentUpdateSessionId } from '$lib/commands/agent';
-  import type { AgentContext, DiscoveredSession } from '$lib/types/agent';
-  import { loadAgentSessions, agentSessions, activeAgentSession } from '$lib/stores/agent';
+  import { agentCreateSession, agentDiscoverSessions, agentListContexts, agentAttachContext, agentUpdateSessionId } from '../commands';
+  import type { AgentContext, DiscoveredSession } from '../types';
+  import { loadAgentSessions, agentSessions, activeAgentSession } from '../stores';
   import { tabs as tabsStore, addTab, activateTab } from '$lib/shared/stores/tabs';
   import { showToast } from '$lib/components/shared/toast';
   import { get } from 'svelte/store';

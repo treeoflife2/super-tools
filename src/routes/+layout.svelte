@@ -9,10 +9,10 @@
   import EnvManagerModal from '$lib/components/env/EnvManagerModal.svelte';
   import SettingsModal from '$lib/components/settings/SettingsModal.svelte';
   import GitHubConnect from '$lib/components/github/GitHubConnect.svelte';
-  import { loadAgentSessions, loadAgentContexts } from '$lib/stores/agent';
-  import NewSessionModal from '$lib/components/agent/NewSessionModal.svelte';
-  import EditSessionModal from '$lib/components/agent/EditSessionModal.svelte';
-  import UsageDashboard from '$lib/components/agent/UsageDashboard.svelte';
+  import { loadAgentSessions, loadAgentContexts } from '$lib/modes/agent/stores';
+  import NewSessionModal from '$lib/modes/agent/components/NewSessionModal.svelte';
+  import EditSessionModal from '$lib/modes/agent/components/EditSessionModal.svelte';
+  import UsageDashboard from '$lib/modes/agent/components/UsageDashboard.svelte';
   import favicon from '$lib/assets/favicon.svg';
 
   import { onMount, onDestroy } from 'svelte';
@@ -28,13 +28,13 @@
   import { setConnected, setLastSynced, hasSyncedOnce, markSynced, showSyncRestorePrompt } from '$lib/stores/github';
   import { githubGetStatus, gistCheckExists, gistSyncPush, gistSyncPull } from '$lib/commands/github';
   import { activeModal, aiPanelOpen, mode } from '$lib/stores/app';
-  import { agentSessionKey, loadAgentUsageLimits, loadAgentClaudePlan, agentSessions, activeAgentSession } from '$lib/stores/agent';
+  import { agentSessionKey, loadAgentUsageLimits, loadAgentClaudePlan, agentSessions, activeAgentSession } from '$lib/modes/agent/stores';
   import { sshProfiles, activeSshProfile, loadSshProfiles } from '$lib/modes/ssh/stores';
   import type { SshProfile } from '$lib/modes/ssh/types';
   import { getSetting } from '$lib/commands/settings';
   import AIPanel from '$lib/components/ai/AIPanel.svelte';
   import { tabs, addTab, activeTabId, activateTab } from '$lib/shared/stores/tabs';
-  import type { AgentSession } from '$lib/types/agent';
+  import type { AgentSession } from '$lib/modes/agent/types';
   import { setupGlobalShortcuts, teardownGlobalShortcuts } from '$lib/utils/shortcuts';
   import { applyTheme } from '$lib/utils/theme';
   import ShortcutsOverlay from '$lib/components/shared/ShortcutsOverlay.svelte';

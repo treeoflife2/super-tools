@@ -18,9 +18,9 @@
     agentDeleteContext,
     agentFetchUsageLimits,
     agentGetUsageAnalytics,
-  } from '$lib/commands/agent';
-  import type { ClaudePlugin, MarketplacePlugin, AgentContext, UsageAnalytics } from '$lib/types/agent';
-  import { agentUsageLimits } from '$lib/stores/agent';
+  } from '$lib/modes/agent/commands';
+  import type { ClaudePlugin, MarketplacePlugin, AgentContext, UsageAnalytics } from '$lib/modes/agent/types';
+  import { agentUsageLimits } from '$lib/modes/agent/stores';
   import {
     ACCENT_PALETTE,
     THEME_PREVIEW_COLORS,
@@ -137,7 +137,7 @@
     await setSetting(key, value);
     // If session key changed, update store and fetch limits immediately
     if (key === 'agent_session_key') {
-      import('$lib/stores/agent').then(({ agentSessionKey, loadAgentUsageLimits }) => {
+      import('$lib/modes/agent/stores').then(({ agentSessionKey, loadAgentUsageLimits }) => {
         agentSessionKey.set(value);
         if (value) loadAgentUsageLimits();
       });

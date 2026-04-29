@@ -9,7 +9,7 @@ import type {
   UsageAnalytics,
   ClaudePlugin,
   MarketplacePlugin,
-} from '$lib/types/agent';
+} from './types';
 
 // Session CRUD
 export const agentListSessions = () => invoke<AgentSession[]>('agent_list_sessions');

@@ -17,7 +17,7 @@
     agentSessions,
     agentSoundEnabled,
     agentDockBounceEnabled,
-  } from '$lib/stores/agent';
+  } from '../stores';
   import { getSetting } from '$lib/commands/settings';
   import { tabs as tabsStore, closeTab, activateTab } from '$lib/shared/stores/tabs';
   import {
@@ -37,11 +37,11 @@
     agentKillTerminal,
     agentRemoveWorktree,
     agentDeleteSession,
-  } from '$lib/commands/agent';
-  import { refreshAgentGitStatus, refreshAgentContextUsage, loadAgentSessions, agentGitBranchName, agentGitFiles, agentGitAhead, agentGitBehind } from '$lib/stores/agent';
+  } from '../commands';
+  import { refreshAgentGitStatus, refreshAgentContextUsage, loadAgentSessions, agentGitBranchName, agentGitFiles, agentGitAhead, agentGitBehind } from '../stores';
   import { getTerminalTheme } from '$lib/utils/theme';
   import { appearance } from '$lib/stores/settings';
-  import { getPurposePrompt } from '$lib/prompts/agent';
+  import { getPurposePrompt } from '../ai/prompt';
   import { AGENT_EVENT } from '$lib/shared/constants/events';
   import {
     AGENT_NOTIFY_DEBOUNCE_MS,

@@ -3,7 +3,7 @@
   import RestNav from './RestNav.svelte';
   import SqlNav from '$lib/modes/sql/components/SqlNav.svelte';
   import NoSqlNav from '$lib/modes/nosql/components/NoSqlNav.svelte';
-  import AgentNav from '$lib/components/agent/AgentNav.svelte';
+  import AgentNav from '$lib/modes/agent/components/AgentNav.svelte';
   import SshNav from '$lib/modes/ssh/components/SshNav.svelte';
   import HistoryPanel from './HistoryPanel.svelte';
   import ImportExportModal from '$lib/components/shared/ImportExportModal.svelte';
