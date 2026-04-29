@@ -152,17 +152,22 @@
               targetPort: target.port,
             });
           } catch (e: any) {
+            if (!show) return; // dialog closed mid-test; discard result
             showToast(`Tunnel test failed: ${friendlyError(e)}`, 'error');
             return;
           }
+          if (!show) return;
           testStatus = 'Testing database…';
         }
       }
       const msg = await nosqlTestConnection(buildConfig());
+      if (!show) return;
       showToast(msg || 'Connection successful', 'success');
     } catch (e: any) {
+      if (!show) return;
       showToast(friendlyError(e), 'error');
     } finally {
+      // Always reset local state. Backend tauri call still runs to completion.
       testing = false;
       testStatus = '';
     }
@@ -525,6 +530,10 @@
     font-family: var(--ui);
     cursor: default;
     transition: border-color 0.12s, color 0.12s;
+    /* Stable width so the label can cycle through "Testing tunnel…" /
+       "Testing database…" without reflowing the action row. */
+    min-width: 160px;
+    text-align: center;
   }
   .conn-test-btn:hover:not(:disabled) {
     border-color: var(--b2);

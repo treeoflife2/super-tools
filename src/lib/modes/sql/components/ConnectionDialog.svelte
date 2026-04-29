@@ -129,16 +129,22 @@
             targetPort: port,
           });
         } catch (e: any) {
+          if (!show) return; // dialog closed mid-test; discard result
           showToast(`Tunnel test failed: ${e?.toString?.() ?? e}`, 'error');
           return;
         }
+        if (!show) return;
         testStatus = 'Testing database…';
       }
       const result = await sqlTestConnection(buildConfig());
+      if (!show) return;
       showToast(result || 'Connection successful', 'success');
     } catch (err: any) {
+      if (!show) return;
       showToast(err.toString(), 'error');
     } finally {
+      // Always reset local state — even if the dialog was reopened later we
+      // want a fresh slate. Backend tauri call still runs to completion.
       testing = false;
       testStatus = '';
     }
@@ -248,7 +254,7 @@
     {/if}
 
     <div class="conn-actions">
-      <button class="conn-btn outline" onclick={handleTest} disabled={testing}>
+      <button class="conn-btn outline conn-test-btn" onclick={handleTest} disabled={testing}>
         {testing ? (testStatus || 'Testing…') : 'Test Connection'}
       </button>
       <div style="flex:1"></div>
@@ -412,6 +418,12 @@
     font-family: var(--ui);
     cursor: default;
     transition: opacity 0.12s, border-color 0.12s, color 0.12s;
+  }
+  /* Stable width on the Test button so the label can cycle through
+     "Testing tunnel…" / "Testing database…" without reflowing the row. */
+  .conn-test-btn {
+    min-width: 160px;
+    text-align: center;
   }
   .conn-btn.outline {
     border: 1px solid var(--b1);
