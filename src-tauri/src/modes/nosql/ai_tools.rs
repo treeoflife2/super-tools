@@ -91,16 +91,12 @@ pub async fn execute_nosql_tool(
 ) -> String {
     match tool_name {
         "list_nosql_connections" => {
-            let conns = sqlx::query_as::<_, (String, String, String, String, i32, String)>(
-                "SELECT id, name, driver, host, port, database_name FROM nosql_connections ORDER BY sort_order ASC"
-            )
-            .fetch_all(pool)
-            .await;
+            let conns = crate::shared::repos::nosql_connections::list_all(pool).await;
 
             match conns {
                 Ok(rows) => {
-                    let result: Vec<serde_json::Value> = rows.iter().map(|(id, name, driver, host, port, db)| {
-                        serde_json::json!({"id": id, "name": name, "driver": driver, "host": host, "port": port, "database": db})
+                    let result: Vec<serde_json::Value> = rows.iter().map(|c| {
+                        serde_json::json!({"id": c.id, "name": c.name, "driver": c.driver, "host": c.host, "port": c.port, "database": c.database_name})
                     }).collect();
                     serde_json::to_string_pretty(&result).unwrap_or_else(|_| "[]".to_string())
                 }
