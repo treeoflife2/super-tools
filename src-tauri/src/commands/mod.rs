@@ -1,9 +1,2 @@
 pub mod settings;
 pub mod ai;
-pub mod agent_models;
-pub mod agent;
-pub mod agent_terminal;
-pub mod agent_git;
-pub mod agent_worktree;
-pub mod agent_plugins;
-pub mod agent_usage;

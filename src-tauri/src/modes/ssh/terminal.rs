@@ -1,4 +1,4 @@
-use crate::commands::agent_models::TerminalOutputPayload;
+use crate::modes::agent::models::TerminalOutputPayload;
 use crate::modes::ssh::models::{SshCommand, SshProfile, SshTerminalEntry, SshTerminalState};
 use crate::shared::platform::credential_store::{credential_store, CredentialStore};
 use base64::Engine;

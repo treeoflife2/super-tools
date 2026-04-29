@@ -1,4 +1,4 @@
-use crate::commands::agent_models::{ClaudePlugin, MarketplacePlugin};
+use crate::modes::agent::models::{ClaudePlugin, MarketplacePlugin};
 use std::fs;
 
 #[tauri::command]

@@ -1,4 +1,4 @@
-use crate::commands::agent_models::GitFileChange;
+use crate::modes::agent::models::GitFileChange;
 
 #[tauri::command]
 pub fn agent_git_status(project_path: String) -> Result<Vec<GitFileChange>, String> {

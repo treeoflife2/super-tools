@@ -50,7 +50,7 @@ pub struct SyncData {
     #[serde(default)]
     pub sql_scripts: Vec<SqlScript>,
     #[serde(default)]
-    pub agent_contexts: Vec<crate::commands::agent_models::AgentContext>,
+    pub agent_contexts: Vec<crate::modes::agent::models::AgentContext>,
     #[serde(default)]
     pub agent_sessions_sync: Vec<AgentSessionSync>,
 }
@@ -129,7 +129,7 @@ async fn export_data(pool: &SqlitePool) -> Result<SyncData, String> {
             .await
             .map_err(|e| format!("Failed to export sql_scripts: {}", e))?;
 
-    let agent_contexts = sqlx::query_as::<_, crate::commands::agent_models::AgentContext>(
+    let agent_contexts = sqlx::query_as::<_, crate::modes::agent::models::AgentContext>(
         "SELECT * FROM agent_contexts ORDER BY name"
     ).fetch_all(pool).await.unwrap_or_default();
 

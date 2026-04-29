@@ -1,4 +1,4 @@
-use crate::commands::agent_models::{TerminalEntry, TerminalOutputPayload, TerminalState};
+use crate::modes::agent::models::{TerminalEntry, TerminalOutputPayload, TerminalState};
 use base64::Engine;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};

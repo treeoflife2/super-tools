@@ -1,4 +1,4 @@
-use crate::commands::agent_models::{AgentContext, AgentSession};
+use crate::modes::agent::models::{AgentContext, AgentSession};
 use crate::shared::repos::sessions as sessions_repo;
 use sqlx::SqlitePool;
 use std::path::PathBuf;

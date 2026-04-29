@@ -1,6 +1,6 @@
 use sqlx::SqlitePool;
 
-use crate::commands::agent_models::{AgentContext, AgentSession};
+use crate::modes::agent::models::{AgentContext, AgentSession};
 
 // ---------------------------------------------------------------------------
 // agent_sessions
