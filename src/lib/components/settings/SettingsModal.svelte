@@ -1,5 +1,6 @@
 <script lang="ts">
   import Modal from '$lib/shared/primitives/Modal.svelte';
+  import { getVersion } from '@tauri-apps/api/app';
   import { activeModal } from '$lib/stores/app';
   import { settings, setSetting, appearance, saveAppearance } from '$lib/stores/settings';
   import { applyTheme, getThemes, getTheme } from '$lib/utils/theme';
@@ -38,6 +39,9 @@
 
   let show = $state(false);
   let activeTab = $state<SettingsTab>('general');
+  let appVersion = $state('');
+
+  getVersion().then((v) => { appVersion = v; }).catch(() => { appVersion = ''; });
 
   $effect(() => {
     const modal = $activeModal;
@@ -1383,7 +1387,7 @@
           <!-- App identity -->
           <div class="about-header">
             <span class="about-app-name">Clauge</span>
-            <span class="about-version">v0.9.0</span>
+            <span class="about-version">v{appVersion || '—'}</span>
           </div>
           <p class="about-desc">The world's first AI-powered developer toolkit with built-in REST client, SQL & NoSQL database management, environment variables, GitHub sync, and more — all in one beautiful desktop app.</p>
 

@@ -451,7 +451,19 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                window.hide().ok();
+                let win = window.clone();
+                tauri::async_runtime::spawn(async move {
+                    // macOS: hiding a window mid-fullscreen leaves a blank fullscreen
+                    // space. Exit fullscreen first, wait for the animation, then hide.
+                    if matches!(win.is_fullscreen(), Ok(true)) {
+                        let _ = win.set_fullscreen(false);
+                        for _ in 0..30 {
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                            if matches!(win.is_fullscreen(), Ok(false)) { break; }
+                        }
+                    }
+                    let _ = win.hide();
+                });
             }
         })
         .build(tauri::generate_context!())
