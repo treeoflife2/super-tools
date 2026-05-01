@@ -47,21 +47,28 @@
   }
 
   function setMode(m: AppMode) {
+    // Click same mode again → toggle nav panel closed.
+    // Click different mode → switch and ensure panel is open.
+    if ($mode === m && $navOpen) {
+      navOpen.set(false);
+      return;
+    }
     if (m !== 'history') previousMode = m;
     mode.set(m);
     activeHistoryEntry.set(null);
-    if (!$navOpen) navOpen.set(true);
+    navOpen.set(true);
   }
 
   function toggleHistory() {
     if ($mode === 'history') {
       mode.set(previousMode);
       activeHistoryEntry.set(null);
-    } else {
-      previousMode = $mode as any;
-      mode.set('history');
+      if ($navOpen) navOpen.set(false);
+      return;
     }
-    if (!$navOpen) navOpen.set(true);
+    previousMode = $mode as any;
+    mode.set('history');
+    navOpen.set(true);
   }
 
   function toggleProfileMenu() {

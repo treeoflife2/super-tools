@@ -9,7 +9,6 @@
   import ImportExportModal from '$lib/shared/primitives/ImportExportModal.svelte';
   import { getNavPinned, setNavPinned } from '$lib/shared/constants/storage';
   import { AGENT_EVENT } from '$lib/shared/constants/events';
-  import { NAV_HOVER_TRIGGER_PX, NAV_HOVER_LEFTWARD_FRAMES } from '$lib/shared/constants/timings';
 
   let searchPerMode = $state<Record<string, string>>({ rest: '', sql: '', nosql: '', agent: '', ssh: '' });
   let searchQuery = $derived(searchPerMode[$mode] ?? '');
@@ -20,93 +19,37 @@
   let sshNavRef: ReturnType<typeof SshNav> | undefined = $state();
   let showImportExport = $state(false);
 
-  // Pin/unpin: pinned = always visible in layout, unpinned = overlay on hover (Arc browser style)
+  // Pin/unpin: pinned = always visible in layout, unpinned = overlay panel
+  // toggled via clicking sidebar icons.
+  //
+  // No hover trigger — the previous edge-strip + leftward-streak design caused
+  // two problems:
+  //   1. Dragging text leftward (e.g. selecting from an xterm terminal) would
+  //      accidentally reveal the panel mid-selection.
+  //   2. When the window was zoomed/fit-to-screen, the cursor couldn't move
+  //      further left than x=0, so the leftward-streak never accumulated and
+  //      the trigger felt broken.
+  // Click-to-open removes both classes of issue.
   let navPinned = $state(getNavPinned());
-  let hoverVisible = $state(false);
-  let hoverTimer: ReturnType<typeof setTimeout> | null = null;
 
   function togglePin() {
     navPinned = !navPinned;
     setNavPinned(navPinned);
-    if (navPinned) {
-      navOpen.set(true);
-      hoverVisible = false;
-    } else {
-      navOpen.set(false);
-    }
+    navOpen.set(navPinned);
   }
 
   let navPanelEl: HTMLElement;
 
-  // ── Edge-trigger guards ────────────────────────────────────────────────────
-  // Two conditions must hold before the overlay reveals when the pointer is
-  // inside the trigger zone:
-  //   A) No selection drag is in progress (any document-level mousedown sets
-  //      isPointerDragging until mouseup). This blocks reveal while the user
-  //      is dragging a text selection from a terminal toward the left edge.
-  //   B) The pointer must have moved leftward for several consecutive frames
-  //      (NAV_HOVER_LEFTWARD_FRAMES). This filters cursor jitter and brief
-  //      right→left grazes when normal mouse movement crosses the edge.
-  let isPointerDragging = false;
-  let prevPointerX = -1;
-  let leftwardStreak = 0;
-
-  function handleGlobalMouseDown() {
-    isPointerDragging = true;
-  }
-  function handleGlobalMouseUp() {
-    isPointerDragging = false;
+  function handleMouseLeavePanel(_e: MouseEvent) {
+    // No-op — close is now driven by sidebar icon click or overlay dismiss
+    // events, not by mouse leave. Keeping the binding so future tweaks
+    // (e.g. close-on-outside-click) have a hook.
   }
 
-  function handleZoneMouseMove(e: MouseEvent) {
-    if (navPinned) return;
-    if (hoverVisible) return;
-    // Guard A: never reveal mid-drag (e.g. user dragging a text selection).
-    if (isPointerDragging) {
-      prevPointerX = e.clientX;
-      leftwardStreak = 0;
-      return;
-    }
-    // Guard B: require sustained leftward motion. Track streak of frames
-    // where currentX < previousX while inside the trigger zone.
-    if (prevPointerX < 0) {
-      prevPointerX = e.clientX;
-      leftwardStreak = 0;
-      return;
-    }
-    if (e.clientX < prevPointerX) {
-      leftwardStreak++;
-    } else if (e.clientX > prevPointerX) {
-      leftwardStreak = 0;
-    }
-    prevPointerX = e.clientX;
-    if (leftwardStreak >= NAV_HOVER_LEFTWARD_FRAMES) {
-      hoverVisible = true;
-      leftwardStreak = 0;
-    }
-  }
-
-  function handleZoneMouseLeave() {
-    // Reset streak when pointer leaves the trigger strip so a fresh entry
-    // starts the leftward count from scratch.
-    prevPointerX = -1;
-    leftwardStreak = 0;
-  }
-
-  function handleMouseLeavePanel(e: MouseEvent) {
-    if (navPinned) return;
-    if (!navPanelEl) return;
-    const rect = navPanelEl.getBoundingClientRect();
-    // Only hide when mouse exits from the RIGHT edge (into content area)
-    if (e.clientX >= rect.right - 2) {
-      hoverVisible = false;
-    }
-    // Exiting left (toward sidebar) — keep visible
-  }
-
-  // Close overlay when any session action dispatches (edit/reset/relaunch opens modal or respawns terminal)
+  // Close overlay when any session action dispatches (edit/reset/relaunch
+  // opens modal or respawns terminal). Pinned mode stays open.
   function handleOverlayDismiss() {
-    if (!navPinned) hoverVisible = false;
+    if (!navPinned) navOpen.set(false);
   }
 
   import { onMount, onDestroy } from 'svelte';
@@ -115,19 +58,12 @@
     window.addEventListener(AGENT_EVENT.RESET_SESSION, handleOverlayDismiss);
     window.addEventListener(AGENT_EVENT.RELAUNCH_SESSION, handleOverlayDismiss);
     window.addEventListener(AGENT_EVENT.NEW_SESSION, handleOverlayDismiss);
-    // Track drag state at document level (capture phase) so a selection drag
-    // started anywhere — including inside an xterm terminal — gates the
-    // overlay reveal.
-    window.addEventListener('mousedown', handleGlobalMouseDown, true);
-    window.addEventListener('mouseup', handleGlobalMouseUp, true);
   });
   onDestroy(() => {
     window.removeEventListener(AGENT_EVENT.EDIT_SESSION, handleOverlayDismiss);
     window.removeEventListener(AGENT_EVENT.RESET_SESSION, handleOverlayDismiss);
     window.removeEventListener(AGENT_EVENT.RELAUNCH_SESSION, handleOverlayDismiss);
     window.removeEventListener(AGENT_EVENT.NEW_SESSION, handleOverlayDismiss);
-    window.removeEventListener('mousedown', handleGlobalMouseDown, true);
-    window.removeEventListener('mouseup', handleGlobalMouseUp, true);
   });
 
   function setSearch(val: string) {
@@ -173,25 +109,12 @@
   }
 </script>
 
-<!-- Hover trigger zone: thin strip on left edge when unpinned. Reveal is
-     gated by Guard A (no active drag) and Guard B (sustained leftward
-     pointer motion) inside handleZoneMouseMove. -->
-{#if !navPinned && !hoverVisible}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    class="nav-hover-zone"
-    style="width:{NAV_HOVER_TRIGGER_PX}px"
-    onmousemove={handleZoneMouseMove}
-    onmouseleave={handleZoneMouseLeave}
-  ></div>
-{/if}
-
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <nav
   bind:this={navPanelEl}
   class="nav-panel glass-surface-light"
-  class:shut={navPinned ? !$navOpen : !hoverVisible}
-  class:overlay={!navPinned && hoverVisible}
+  class:shut={!$navOpen}
+  class:overlay={!navPinned && $navOpen}
   onmouseleave={handleMouseLeavePanel}
 >
   {#if $mode === 'history'}
