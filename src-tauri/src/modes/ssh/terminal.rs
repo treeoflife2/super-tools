@@ -180,9 +180,17 @@ async fn run_ssh_session(
     let host = profile.host.clone();
     let port: u16 = profile.port as u16;
 
-    // Hard timeout so a stuck TCP connect / unreachable host doesn't hang the
-    // session indefinitely. 15s is generous on cellular/VPN, plenty otherwise.
-    let connect_fut = client::connect(config, (host.as_str(), port), handler);
+    // Connect the TCP socket manually so we can disable Nagle's algorithm.
+    // For interactive SSH (1-byte keystrokes), Nagle + delayed-ACK adds
+    // 40-200ms of artificial latency per character. OpenSSH disables this;
+    // russh doesn't by default, and only exposes it via connect_stream.
+    let socket = tokio::net::TcpStream::connect((host.as_str(), port))
+        .await
+        .map_err(|e| format!("tcp connect: {}", e))?;
+    if let Err(e) = socket.set_nodelay(true) {
+        eprintln!("[ssh] warning: TCP_NODELAY not set ({})", e);
+    }
+    let connect_fut = client::connect_stream(config, socket, handler);
     let mut handle: Handle<ClientHandler> = match tokio::time::timeout(
         std::time::Duration::from_secs(15),
         connect_fut,

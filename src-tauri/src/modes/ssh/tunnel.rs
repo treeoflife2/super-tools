@@ -265,8 +265,14 @@ async fn connect_and_auth(
     let host = profile.host.clone();
     let port: u16 = profile.port as u16;
 
-    // 15s connect timeout matches terminal.rs.
-    let connect_fut = client::connect(config, (host.as_str(), port), ClientHandler);
+    // 15s connect timeout matches terminal.rs. Manually create the TCP
+    // socket so we can disable Nagle (TCP_NODELAY) — small interactive
+    // packets through tunnels benefit from the same treatment.
+    let socket = tokio::net::TcpStream::connect((host.as_str(), port))
+        .await
+        .map_err(|e| format!("tcp connect: {}", e))?;
+    let _ = socket.set_nodelay(true);
+    let connect_fut = client::connect_stream(config, socket, ClientHandler);
     let mut handle: Handle<ClientHandler> = match tokio::time::timeout(
         std::time::Duration::from_secs(15),
         connect_fut,
