@@ -21,6 +21,55 @@ use std::time::Duration;
 
 use super::client::SqlConnectionConfig;
 
+/// Map ClickHouse error code → short user-facing message.
+///
+/// Codes are stable across ClickHouse versions (defined in
+/// dbms/Common/ErrorCodes.cpp). For unmapped codes, the caller falls back
+/// to `clean_clickhouse_error_body` which trims the verbose response body.
+fn humanize_clickhouse_code(code: &str) -> Option<&'static str> {
+    match code {
+        "516" | "192" | "193" => Some("Authentication failed — check username and password"),
+        "81" => Some("Database not found — check the database name"),
+        "60" => Some("Table not found"),
+        "47" => Some("Unknown column"),
+        "62" => Some("SQL syntax error"),
+        "159" => Some("Query timed out"),
+        "164" => Some("Read-only — write operation not allowed"),
+        "210" => Some("Network error — check host and port"),
+        "241" => Some("Memory limit exceeded"),
+        "252" => Some("Too many parts — server is overloaded"),
+        "394" => Some("Query was cancelled"),
+        _ => None,
+    }
+}
+
+/// Fallback: trim ClickHouse's verbose error body to the salient first
+/// sentence + labelled tag (e.g. `(AUTHENTICATION_FAILED)`). Used when
+/// `humanize_clickhouse_code` doesn't have a mapping for the error code.
+fn clean_clickhouse_error_body(body: &str) -> String {
+    let after_exc = body.splitn(2, "DB::Exception:").nth(1).unwrap_or(body);
+    let first = after_exc.splitn(2, ". ").next().unwrap_or(after_exc);
+    let trimmed = first.trim().trim_end_matches('.').trim();
+    let label = body
+        .rsplit('(')
+        .filter_map(|s| s.split(')').next())
+        .find(|s| s.chars().all(|c| c.is_ascii_uppercase() || c == '_') && s.len() > 3);
+
+    let mut out = trimmed.to_string();
+    if out.len() > 220 {
+        out.truncate(220);
+        out.push('…');
+    }
+    if let Some(l) = label {
+        if !out.contains(l) {
+            out.push_str(" (");
+            out.push_str(l);
+            out.push(')');
+        }
+    }
+    out
+}
+
 /// Stateless HTTP client for a single ClickHouse connection. Cloning is
 /// cheap; `reqwest::Client` shares its connection pool internally.
 #[derive(Debug, Clone)]
@@ -139,9 +188,14 @@ impl ClickhouseClient {
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string());
             let body = response.text().await.unwrap_or_default();
-            return Err(match code {
-                Some(c) => format!("ClickHouse error (code {}): {}", c, body.trim()),
-                None => format!("ClickHouse error ({}): {}", status, body.trim()),
+            // Prefer our hand-written message for known codes; fall back to
+            // a trimmed version of ClickHouse's verbose body otherwise.
+            return Err(match code.as_deref().and_then(humanize_clickhouse_code) {
+                Some(msg) => msg.to_string(),
+                None => match code {
+                    Some(c) => format!("ClickHouse error (code {}): {}", c, clean_clickhouse_error_body(&body)),
+                    None => format!("ClickHouse error ({}): {}", status, clean_clickhouse_error_body(&body)),
+                },
             });
         }
 

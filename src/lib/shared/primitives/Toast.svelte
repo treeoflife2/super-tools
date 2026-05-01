@@ -34,17 +34,17 @@
   }
 
   .clauge-toast {
-    padding: 8px 16px;
+    padding: 10px 14px;
     border-radius: var(--radius-lg);
     font-family: var(--mono);
     font-size: 12px;
     color: #fff;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
+    max-width: 420px;
     animation: slideIn 0.2s ease;
     pointer-events: auto;
-    white-space: nowrap;
     background: var(--n);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
@@ -82,11 +82,14 @@
 
   .toast-icon {
     font-size: 14px;
-    line-height: 1;
+    line-height: 1.4;
     flex-shrink: 0;
+    margin-top: 1px;
   }
 
   .toast-msg {
-    line-height: 1.3;
+    line-height: 1.4;
+    word-break: break-word;
+    overflow-wrap: anywhere;
   }
 </style>
