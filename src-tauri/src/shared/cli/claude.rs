@@ -42,17 +42,25 @@ impl CliRunner for ClaudeRunner {
     }
 
     fn resolve_binary_path(&self) -> String {
-        let user_shell = default_user_shell();
-        // bash/zsh-only flags. PowerShell on Windows ignores these and silently
-        // succeeds, but the `which` command does not exist there — Windows
-        // runtime parity is tracked separately. For now this fallthrough leaves
-        // BINARY ("claude") as-is, which is correct if the user has it on PATH.
-        if let Ok(output) = std::process::Command::new(&user_shell)
-            .args(["-l", "-i", "-c", &format!("which {}", BINARY)])
-            .output()
-        {
+        // On Unix: spawn the user's shell with `-l -i -c "which claude"` so PATH
+        // adjustments from rc files (nvm, fnm, asdf) are visible.
+        // On Windows: shell out directly to `where.exe claude` — no shell rc to
+        // worry about, and `which` does not exist there.
+        let (shell_path, shell_kind) = default_user_shell();
+        let (binary, args) = if cfg!(target_os = "windows") {
+            ("where.exe".to_string(), vec![BINARY.to_string()])
+        } else {
+            (
+                shell_path.clone(),
+                shell_kind.exec_command_argv(&format!("which {}", BINARY)),
+            )
+        };
+
+        if let Ok(output) = std::process::Command::new(&binary).args(&args).output() {
             if output.status.success() {
-                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                // `where.exe` may print multiple matches (one per line). Take the first.
+                let path = stdout.lines().next().unwrap_or("").trim().to_string();
                 if !path.is_empty() {
                     return path;
                 }

@@ -48,13 +48,14 @@ pub fn agent_spawn_terminal(
         skip_permissions: skip_permissions.unwrap_or(false),
     });
 
-    let user_shell = default_user_shell();
-    let mut cmd = CommandBuilder::new(&user_shell);
-    // -l (login) sources ~/.zprofile, but nvm/fnm/asdf set up node on PATH inside
-    // ~/.zshrc which only loads under -i (interactive). Without -i, the CLI's
-    // node-based hooks fail with "node: command not found" even though the user's
-    // Terminal works fine.
-    cmd.arg("-l"); cmd.arg("-i"); cmd.arg("-c"); cmd.arg(&spawn_cmd);
+    let (shell_path, shell_kind) = default_user_shell();
+    let mut cmd = CommandBuilder::new(&shell_path);
+    // For bash/zsh: -l (login) sources ~/.zprofile but tools like nvm/fnm/asdf
+    // configure node on PATH inside ~/.zshrc which only loads with -i. PowerShell
+    // and cmd.exe don't have these concepts; ShellKind handles that.
+    for arg in shell_kind.exec_command_argv(&spawn_cmd) {
+        cmd.arg(&arg);
+    }
     cmd.cwd(&project_path);
     if let Some(home) = dirs::home_dir() { cmd.env("HOME", home.to_string_lossy().to_string()); }
     apply_windows_env(&mut cmd);
@@ -100,9 +101,12 @@ pub fn agent_spawn_shell(
         .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
         .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
-    let user_shell = default_user_shell();
-    let mut cmd = CommandBuilder::new(&user_shell);
-    cmd.arg("-l"); cmd.arg("-i"); cmd.cwd(&project_path);
+    let (shell_path, shell_kind) = default_user_shell();
+    let mut cmd = CommandBuilder::new(&shell_path);
+    for arg in shell_kind.interactive_login_args() {
+        cmd.arg(arg);
+    }
+    cmd.cwd(&project_path);
     if let Some(home) = dirs::home_dir() { cmd.env("HOME", home.to_string_lossy().to_string()); }
     apply_windows_env(&mut cmd);
     cmd.env("TERM", "xterm-256color");
