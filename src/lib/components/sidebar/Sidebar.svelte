@@ -224,27 +224,33 @@
   {/if}
 
   <!-- Mode buttons -->
-  <SidebarButton tip="Agent" active={$mode === 'agent'} dotColor="var(--agent, #d2a8ff)" id="sbi-agent" onclick={() => setMode('agent')}>
-    <svg viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2" ry="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="12" y2="14"/></svg>
+  <SidebarButton label="Agent" tip="Agent" active={$mode === 'agent'} dotColor="var(--agent, #d2a8ff)" id="sbi-agent" onclick={() => setMode('agent')}>
+    <!-- Sparkle — universal AI/agent icon (Claude, Cursor, Notion AI) -->
+    <svg viewBox="0 0 24 24"><path d="M12 3l1.6 4.8L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.2L12 3z"/><path d="M18.5 14l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9.9-2.6z"/></svg>
   </SidebarButton>
-  <SidebarButton tip="REST API" active={$mode === 'rest'} dotColor="var(--rest)" id="sbi-rest" onclick={() => setMode('rest')}>
-    <svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+  <SidebarButton label="REST" tip="REST API" active={$mode === 'rest'} dotColor="var(--rest)" id="sbi-rest" onclick={() => setMode('rest')}>
+    <!-- Globe — clearly "web/HTTP" -->
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
   </SidebarButton>
-  <SidebarButton tip="SQL" active={$mode === 'sql'} dotColor="var(--sql)" id="sbi-sql" onclick={() => setMode('sql')}>
-    <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+  <SidebarButton label="SQL" tip="SQL" active={$mode === 'sql'} dotColor="var(--sql)" id="sbi-sql" onclick={() => setMode('sql')}>
+    <!-- Database cylinder — kept, slightly tighter -->
+    <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="2.5"/><path d="M4 5v14c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5V5"/><path d="M4 12c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5"/></svg>
   </SidebarButton>
-  <SidebarButton tip="NoSQL" active={$mode === 'nosql'} dotColor="var(--nosql)" id="sbi-nosql" onclick={() => setMode('nosql')}>
-    <svg viewBox="0 0 24 24" fill="none"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
+  <SidebarButton label="NoSQL" tip="NoSQL" active={$mode === 'nosql'} dotColor="var(--nosql)" id="sbi-nosql" onclick={() => setMode('nosql')}>
+    <!-- Curly braces — JSON / NoSQL document style -->
+    <svg viewBox="0 0 24 24"><path d="M8 3a2 2 0 00-2 2v4a2 2 0 01-2 2H3a1 1 0 000 2h1a2 2 0 012 2v4a2 2 0 002 2"/><path d="M16 3a2 2 0 012 2v4a2 2 0 002 2h1a1 1 0 010 2h-1a2 2 0 00-2 2v4a2 2 0 01-2 2"/></svg>
   </SidebarButton>
-  <SidebarButton tip="SSH" active={$mode === 'ssh'} dotColor="var(--ssh)" id="sbi-ssh" onclick={() => setMode('ssh')}>
-    <svg viewBox="0 0 24 24" fill="none"><rect x="2" y="4" width="20" height="6" rx="1"/><rect x="2" y="14" width="20" height="6" rx="1"/><line x1="6" y1="7" x2="6.01" y2="7"/><line x1="6" y1="17" x2="6.01" y2="17"/></svg>
+  <SidebarButton label="SSH" tip="SSH" active={$mode === 'ssh'} dotColor="var(--ssh)" id="sbi-ssh" onclick={() => setMode('ssh')}>
+    <!-- Terminal prompt >_  — universal "shell" icon -->
+    <svg viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
   </SidebarButton>
 
   <div class="sb-sep"></div>
 
   <!-- History -->
-  <SidebarButton tip="History" active={$mode === 'history'} id="sbi-history" onclick={toggleHistory}>
-    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+  <SidebarButton label="History" tip="History" active={$mode === 'history'} id="sbi-history" onclick={toggleHistory}>
+    <!-- Clock with rewind arrow — distinct from a generic clock -->
+    <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 109-9 9.5 9.5 0 00-6.4 2.5L3 8"/><polyline points="3 3 3 8 8 8"/><polyline points="12 8 12 13 15 15"/></svg>
   </SidebarButton>
 
   <!-- Bottom section -->

@@ -3,6 +3,7 @@
 
   let {
     tip = '',
+    label = '',
     active = false,
     dotColor = '',
     id = '',
@@ -10,6 +11,7 @@
     children,
   }: {
     tip?: string;
+    label?: string;
     active?: boolean;
     dotColor?: string;
     id?: string;
@@ -25,29 +27,44 @@
   {id}
   onclick={onclick}
 >
-  {@render children()}
-  {#if dotColor}
-    <span class="sbi-dot" style="background:{dotColor}"></span>
+  <span class="sbi-icon">
+    {@render children()}
+    {#if dotColor}
+      <span class="sbi-dot" style="background:{dotColor}"></span>
+    {/if}
+  </span>
+  {#if label}
+    <span class="sbi-label">{label}</span>
   {/if}
 </button>
 
 <style>
   .sbi {
-    width: 34px;
-    height: 34px;
-    border-radius: 7px;
+    width: 60px;
+    min-height: 52px;
+    border-radius: 8px;
     border: none;
     background: transparent;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 3px;
+    padding: 6px 2px 5px;
     cursor: pointer;
     position: relative;
     transition: background 0.12s;
   }
+  .sbi-icon {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 0;
+  }
   .sbi :global(svg) {
-    width: 16px;
-    height: 16px;
+    width: 20px;
+    height: 20px;
     stroke: var(--t3);
     fill: none;
     stroke-width: 1.6;
@@ -55,28 +72,44 @@
     stroke-linejoin: round;
     transition: stroke 0.12s;
   }
+  .sbi-label {
+    font-family: var(--ui);
+    font-size: 10px;
+    line-height: 1;
+    color: var(--t3);
+    font-weight: 500;
+    letter-spacing: 0.1px;
+    transition: color 0.12s;
+    user-select: none;
+  }
   .sbi:hover {
     background: var(--b-subtle);
   }
-  .sbi:hover :global(svg) {
+  .sbi:hover :global(svg),
+  .sbi:hover .sbi-label {
+    color: var(--t1);
     stroke: var(--t1);
   }
   .sbi.on :global(svg) {
     stroke: var(--acc);
+  }
+  .sbi.on .sbi-label {
+    color: var(--acc);
+    font-weight: 600;
   }
   .sbi.on {
     background: color-mix(in srgb, var(--acc) 10%, transparent);
   }
   .sbi-dot {
     position: absolute;
-    top: 4px;
-    right: 4px;
+    top: -1px;
+    right: -2px;
     width: 5px;
     height: 5px;
     border-radius: 50%;
   }
-  /* tooltip */
-  .sbi[data-tip]:hover::after {
+  /* tooltip — only shown when there's no label visible */
+  .sbi[data-tip]:not(:has(.sbi-label)):hover::after {
     content: attr(data-tip);
     position: absolute;
     left: calc(100% + 10px);

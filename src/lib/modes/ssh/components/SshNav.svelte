@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import { sshProfiles, activeSshProfile, loadSshProfiles, sshTerminalIds, sshConnStates } from '../stores';
-  import { sshTouchProfile, sshDeleteProfile } from '../commands';
+  import { sshTouchProfile, sshDeleteProfile, sshKillTerminal } from '../commands';
   import { profileIdFromTabKey } from '../tabkey';
+  import { tabs as tabsStore, closeTab } from '$lib/shared/stores/tabs';
   import { showContextMenu } from '$lib/shared/primitives/contextmenu';
   import { showToast } from '$lib/shared/primitives/toast';
   import NewSshProfileModal from './NewSshProfileModal.svelte';
@@ -49,6 +51,25 @@
     showAdd = true;
   }
 
+  /** Close every tab + kill every session belonging to a given profile.
+   * Used by the "Disconnect" context-menu entry. */
+  function disconnectAllForProfile(profile: SshProfile) {
+    const allTabs = get(tabsStore);
+    const tids = get(sshTerminalIds);
+    const matching = allTabs.filter(
+      (t) => t.mode === 'ssh' && t.key && profileIdFromTabKey(t.key) === profile.id
+    );
+    for (const tab of matching) {
+      if (tab.key) {
+        const termId = tids.get(tab.key);
+        if (termId) sshKillTerminal(termId).catch(() => {});
+        window.dispatchEvent(new CustomEvent(SSH_EVENT.CLOSE_TAB, { detail: { tabKey: tab.key } }));
+      }
+      closeTab(tab.id);
+    }
+    if (get(activeSshProfile)?.id === profile.id) activeSshProfile.set(null);
+  }
+
   const filteredProfiles = $derived(
     searchQuery
       ? $sshProfiles.filter(
@@ -74,33 +95,21 @@
     e.preventDefault();
     e.stopPropagation();
 
-    // "Duplicate Session" only makes sense when the profile has at least
-    // one connected terminal — duplicating creates a second independent
-    // session in parallel.
+    // A profile is "connected" if any of its sessions (tabs) are live.
     const tids = $sshTerminalIds;
     const states = $sshConnStates;
     const hasConnected = Array.from(tids.keys()).some(
       (k) => profileIdFromTabKey(k) === profile.id && states.get(k) === 'connected'
     );
 
-    const items: any[] = [
-      {
-        label: 'Connect',
-        icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>',
-        action: () => handleSelect(profile),
-      },
-      { label: '', action: () => {}, separator: true },
-      {
-        label: 'Edit',
-        icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
-        action: () => {
-          editTarget = profile;
-          showEdit = true;
-        },
-      },
-    ];
+    const items: any[] = [];
 
     if (hasConnected) {
+      items.push({
+        label: 'Disconnect',
+        icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18.36 6.64a9 9 0 11-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>',
+        action: () => disconnectAllForProfile(profile),
+      });
       items.push({
         label: 'Duplicate Session',
         icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>',
@@ -108,7 +117,23 @@
           window.dispatchEvent(new CustomEvent(SSH_EVENT.DUPLICATE_SESSION, { detail: profile }));
         },
       });
+    } else {
+      items.push({
+        label: 'Connect',
+        icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>',
+        action: () => handleSelect(profile),
+      });
     }
+
+    items.push({ label: '', action: () => {}, separator: true });
+    items.push({
+      label: 'Edit',
+      icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
+      action: () => {
+        editTarget = profile;
+        showEdit = true;
+      },
+    });
 
     items.push({ label: '', action: () => {}, separator: true });
     items.push({
@@ -188,7 +213,7 @@
     </div>
   {:else}
     {#each filteredProfiles as profile (profile.id)}
-      {@const connected = $sshTerminalIds.has(profile.id) && $sshConnStates.get(profile.id) === 'connected'}
+      {@const connected = Array.from($sshTerminalIds.keys()).some((k) => profileIdFromTabKey(k) === profile.id && $sshConnStates.get(k) === 'connected')}
       <button
         class="profile-item"
         class:active={$activeSshProfile?.id === profile.id}
