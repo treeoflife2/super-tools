@@ -39,7 +39,7 @@
         <span class="un-title">Clauge v{$updateAvailable.version} is available</span>
         <span class="un-desc">
           {#if infoOnly}
-            Auto-update isn't supported for .deb / .rpm installs. Open the changelog to download the new package.
+            Download the new version to update.
           {:else}
             A new version has been downloaded. Restart to apply.
           {/if}

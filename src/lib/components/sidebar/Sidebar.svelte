@@ -91,7 +91,7 @@
       const result = await checkAndDownloadUpdate();
       if (result) {
         if (result.infoOnly) {
-          showToast(`v${result.version} available — open changelog to download`, 'success');
+          showToast(`v${result.version} is available to download`, 'success');
         } else {
           showToast(`Update v${result.version} downloaded — ready to install`, 'success');
         }
