@@ -108,34 +108,62 @@ struct McpAppState {
     app: Option<tauri::AppHandle>,
 }
 
-/// Bind a listener on 127.0.0.1:`port`, spawn the axum server, and
-/// return a handle whose `shutdown` sender stops the server.
+/// How many sequential ports `start` will try if the requested one is
+/// already in use. Six attempts (requested + 5) covers the common
+/// "another dev tool is on 7421" case without giving up too quickly,
+/// while staying small enough that a totally-blocked range still
+/// fails fast.
+const PORT_FALLBACK_RANGE: u16 = 5;
+
+/// Bind a listener on 127.0.0.1, spawn the axum server, and return a
+/// handle whose `shutdown` sender stops the server. Tries
+/// `requested_port` first; on `AddrInUse` walks up to
+/// `requested_port + PORT_FALLBACK_RANGE`. The handle's `port` field
+/// is the port that was actually bound — caller should compare
+/// against the requested port and persist / re-register if it
+/// differs.
 pub async fn start(
     pool: SqlitePool,
-    port: u16,
+    requested_port: u16,
     token: String,
     app: Option<tauri::AppHandle>,
 ) -> Result<McpHandle, String> {
-    let addr = format!("127.0.0.1:{}", port);
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .map_err(|e| format!("Failed to bind {}: {}", addr, e))?;
+    let mut last_err: Option<String> = None;
+    for offset in 0..=PORT_FALLBACK_RANGE {
+        let port = match requested_port.checked_add(offset) {
+            Some(p) => p,
+            None => break, // overflowed past u16::MAX
+        };
+        let addr = format!("127.0.0.1:{}", port);
+        match tokio::net::TcpListener::bind(&addr).await {
+            Ok(listener) => {
+                let state = McpAppState { pool, token, app };
+                let router = Router::new()
+                    .route("/mcp", post(handle_mcp))
+                    .route("/healthz", axum::routing::get(|| async { "ok" }))
+                    .with_state(Arc::new(state));
 
-    let state = McpAppState { pool, token, app };
-    let app = Router::new()
-        .route("/mcp", post(handle_mcp))
-        .route("/healthz", axum::routing::get(|| async { "ok" }))
-        .with_state(Arc::new(state));
-
-    let (tx, rx) = oneshot::channel::<()>();
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, app)
-            .with_graceful_shutdown(async {
-                let _ = rx.await;
-            })
-            .await;
-    });
-    Ok(McpHandle { port, shutdown: Some(tx) })
+                let (tx, rx) = oneshot::channel::<()>();
+                tokio::spawn(async move {
+                    let _ = axum::serve(listener, router)
+                        .with_graceful_shutdown(async {
+                            let _ = rx.await;
+                        })
+                        .await;
+                });
+                return Ok(McpHandle { port, shutdown: Some(tx) });
+            }
+            Err(e) => {
+                last_err = Some(format!("{}: {}", addr, e));
+            }
+        }
+    }
+    Err(format!(
+        "Failed to bind any port in {}..={}: {}",
+        requested_port,
+        requested_port.saturating_add(PORT_FALLBACK_RANGE),
+        last_err.unwrap_or_default(),
+    ))
 }
 
 /// Single JSON-RPC POST handler. We dispatch on `method` and respond

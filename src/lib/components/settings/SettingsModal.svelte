@@ -277,13 +277,16 @@
         } catch { /* ignore */ }
     }
 
-    /** Lazy-init token + load status when the Workspace tab opens. */
+    /** Lazy-init token + load status when the Workspace tab opens.
+     *  The Rust setup() task auto-starts the server on app boot, so
+     *  by the time this fires we usually just refresh status. The
+     *  token-init branch only matters for legacy installs that
+     *  somehow wound up without one. */
     $effect(() => {
         if (activeTab === "workspace" && show) {
             refreshMcpStatus();
-            // Generate a token on first visit if none exists.
             if (!mcpToken) {
-                workspaceMcpNewToken().then(t => setSetting("workspace_mcp_token", t)).catch(() => {});
+                workspaceMcpNewToken(mcpPort).catch(() => {});
             }
         }
     });
@@ -293,13 +296,13 @@
             if (next) {
                 let token = mcpToken;
                 if (!token) {
-                    token = await workspaceMcpNewToken();
-                    await setSetting("workspace_mcp_token", token);
+                    // workspaceMcpNewToken persists the value internally.
+                    token = await workspaceMcpNewToken(mcpPort);
                 }
                 await setSetting("workspace_mcp_port", String(mcpPort));
                 mcpStatus = await workspaceMcpStart(mcpPort, token);
                 mcpStatusStore.set(mcpStatus);
-                await workspaceMcpRegister(mcpPort, token);
+                await workspaceMcpRegister(mcpStatus.port ?? mcpPort, token);
                 // Persist the desire — drives auto-start on next app boot.
                 await setSetting("workspace_mcp_enabled", "true");
                 showToast(`MCP server running on :${mcpStatus.port}`, "success");
@@ -317,14 +320,22 @@
     }
 
     async function handleRotateMcpToken() {
-        if (mcpStatus.running) {
-            showToast("Stop the server before rotating the token", "error");
-            return;
-        }
         try {
-            const t = await workspaceMcpNewToken();
-            await setSetting("workspace_mcp_token", t);
-            showToast("Token rotated — re-enable the server to use it", "success");
+            // workspaceMcpNewToken atomically: generates a new token,
+            // persists it, and rewrites ~/.claude.json if an entry
+            // exists. Server restart isn't required — the running
+            // instance still uses the old token until next start, but
+            // ~/.claude.json is back in sync with whatever's persisted
+            // for the next start cycle.
+            await workspaceMcpNewToken(mcpStatus.port ?? mcpPort);
+            if (mcpStatus.running) {
+                showToast(
+                    "Token rotated. Restart the server (toggle off + on) for the new token to take effect.",
+                    "success",
+                );
+            } else {
+                showToast("Token rotated", "success");
+            }
         } catch (e) {
             showToast(`Rotate failed: ${e}`, "error");
         }

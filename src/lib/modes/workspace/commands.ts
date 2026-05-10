@@ -250,8 +250,14 @@ export const workspaceMcpRegister = (port: number, token: string, agent?: string
   invoke<void>('workspace_mcp_register', { agent, port, token });
 export const workspaceMcpUnregister = (agent?: string) =>
   invoke<void>('workspace_mcp_unregister', { agent });
-export const workspaceMcpNewToken = () =>
-  invoke<string>('workspace_mcp_new_token');
+/** Rotates the MCP bearer token. Persists the new value under
+ *  `workspace_mcp_token` AND, if `~/.claude.json` already lists
+ *  `clauge-workspace`, rewrites the entry with the new token —
+ *  so the registered config never goes stale relative to the
+ *  server's. Pass the port currently in use (or the requested
+ *  port if the server isn't running yet). */
+export const workspaceMcpNewToken = (port: number) =>
+  invoke<string>('workspace_mcp_new_token', { port });
 
 // ── Project issue scan ───────────────────────────────────────────────
 

@@ -145,6 +145,19 @@ pub fn run() {
             // Started/stopped via workspace_mcp_start/stop commands.
             app.manage(modes::workspace::commands::McpServerState::default());
 
+            // Auto-start the workspace MCP server in the background so
+            // agents can connect without the user opening Settings.
+            // Opt-out via the `workspace_mcp_enabled = "false"` setting.
+            // Backgrounded so a slow port-fallback walk can't delay
+            // the main window.
+            {
+                let app_handle = app.handle().clone();
+                let pool_for_autostart = app.state::<sqlx::SqlitePool>().inner().clone();
+                tauri::async_runtime::spawn(async move {
+                    modes::workspace::commands::maybe_autostart_mcp(app_handle, pool_for_autostart).await;
+                });
+            }
+
             // Apply vibrancy on macOS — use Sidebar material (what native macOS apps use)
             if let Some(window) = app.get_webview_window("main") {
                 let _ = appearance::vibrancy::apply_vibrancy(&window, &saved_material);

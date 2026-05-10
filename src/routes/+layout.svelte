@@ -504,52 +504,15 @@
       }
     } catch { /* non-fatal */ }
 
-    // Auto-start the workspace MCP server. Default-on: only the explicit
-    // string 'false' suppresses startup, so first-run users don't need
-    // to toggle anything. The flag's main job is "remember I disabled it".
+    // Refresh MCP status — the Rust setup() task auto-starts the
+    // server in the background on app boot, we just need to pull
+    // the current state into the frontend store so the topbar
+    // indicator + Settings page render correctly on first paint.
     try {
-      const { settings } = await import('$lib/stores/settings');
-      const { workspaceMcpStart, workspaceMcpRegister, workspaceMcpNewToken } =
-        await import('$lib/modes/workspace/commands');
-      const { mcpStatus, loadMcpStatus } = await import('$lib/modes/workspace/stores');
-      const { get } = await import('svelte/store');
-      const { setSetting } = await import('$lib/stores/settings');
-      const { showToast } = await import('$lib/shared/primitives/toast');
-      const s = get(settings);
-      const enabledRaw = s['workspace_mcp_enabled'];
-      const userOptedOut = enabledRaw === 'false';
-      if (!userOptedOut) {
-        let token = s['workspace_mcp_token'] ?? '';
-        if (!token) {
-          token = await workspaceMcpNewToken();
-          await setSetting('workspace_mcp_token', token);
-        }
-        const port = Number(s['workspace_mcp_port'] ?? '7421') || 7421;
-        try {
-          const status = await workspaceMcpStart(port, token);
-          mcpStatus.set(status);
-          // Refresh registration in case the user moved between
-          // machines or the file was hand-edited.
-          await workspaceMcpRegister(port, token).catch((e) => {
-            // Registration write is non-fatal — the server is running
-            // even if ~/.claude.json wasn't writable.
-            console.warn('MCP register failed:', e);
-          });
-          // Persist the implicit "on" so a later toggle-off has something
-          // to flip. Skip if the user already set the flag explicitly.
-          if (enabledRaw === undefined) {
-            await setSetting('workspace_mcp_enabled', 'true');
-          }
-        } catch (e) {
-          // Surface the failure — silent grey dot is exactly the
-          // bug we're trying to avoid.
-          console.warn('MCP auto-start failed:', e);
-          showToast(`MCP server failed to start: ${e}`, 'error');
-          await loadMcpStatus();
-        }
-      }
+      const { loadMcpStatus } = await import('$lib/modes/workspace/stores');
+      await loadMcpStatus();
     } catch (e) {
-      console.warn('MCP auto-start setup failed:', e);
+      console.warn('MCP status refresh failed:', e);
     }
 
     // ── Deep-link handling (centralized) ────────────────────────────────────

@@ -5,6 +5,7 @@ use crate::modes::workspace::models::{
     ProjectIssue, ProjectScanResult, Workspace, WorkspaceBoard, WorkspaceBoardCard,
     WorkspaceBoardColumn, WorkspaceNote,
 };
+use crate::shared::repos::settings as settings_repo;
 use crate::shared::repos::workspaces as repo;
 
 fn project_name_from_path(path: &str) -> String {
@@ -1004,10 +1005,26 @@ pub async fn workspace_mcp_start(
     // Hand the app handle to the MCP server so MCP-side mutations
     // (cards_call_coworker etc.) can emit `workspace:card-updated`
     // and refresh open drawers live.
-    let handle = mcp::start(pool.inner().clone(), port, token, Some(app)).await?;
-    let p = handle.port;
+    let handle = mcp::start(pool.inner().clone(), port, token.clone(), Some(app)).await?;
+    let bound_port = handle.port;
     *g = Some(handle);
-    Ok(McpStatus { running: true, port: Some(p) })
+    drop(g);
+    // If port fallback kicked in, back-write the actually-bound port
+    // so the UI + future auto-starts use it. Best-effort — failing to
+    // persist doesn't invalidate the running server.
+    if bound_port != port {
+        let _ = settings_repo::upsert(
+            pool.inner(),
+            "workspace_mcp_port",
+            &bound_port.to_string(),
+        )
+        .await;
+        // ~/.claude.json was registered (or will be) against the
+        // requested port; rewrite it with the bound port if a
+        // claude-code entry already exists.
+        let _ = sync_claude_code_registration(bound_port, &token);
+    }
+    Ok(McpStatus { running: true, port: Some(bound_port) })
 }
 
 #[tauri::command]
@@ -1140,11 +1157,114 @@ fn unregister_claude_code() -> Result<(), String> {
     Ok(())
 }
 
-/// Generate a fresh random token. Caller is expected to persist it
-/// via the settings store and pass it to start + register.
+/// Generate a fresh random token, persist it under
+/// `workspace_mcp_token`, AND rewrite any existing `~/.claude.json`
+/// entry so the registered token never goes stale relative to the
+/// server's. Returns the new token.
+///
+/// `port` lets us write the correct URL into `~/.claude.json` —
+/// callers pass the port the server is bound on (or the requested
+/// port if it isn't running yet; the next start will sync if
+/// fallback kicks in).
 #[tauri::command]
-pub fn workspace_mcp_new_token() -> String {
-    uuid::Uuid::new_v4().to_string()
+pub async fn workspace_mcp_new_token(
+    pool: State<'_, SqlitePool>,
+    port: u16,
+) -> Result<String, String> {
+    let token = uuid::Uuid::new_v4().to_string();
+    settings_repo::upsert(pool.inner(), "workspace_mcp_token", &token)
+        .await
+        .map_err(|e| e.to_string())?;
+    // Best-effort re-register. If the registration fails (claude.json
+    // missing / unreadable) the new token is still persisted; the
+    // user's next start cycle will write it.
+    let _ = sync_claude_code_registration(port, &token);
+    Ok(token)
+}
+
+/// If `~/.claude.json` already lists `clauge-workspace`, rewrite the
+/// entry with the given port + token. No-op when the file doesn't
+/// exist or has no entry — start/enable is the path that creates the
+/// initial entry, this is only for keeping an existing one in sync.
+fn sync_claude_code_registration(port: u16, token: &str) -> Result<(), String> {
+    let path = match claude_settings_path() {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+    if !path.exists() {
+        return Ok(());
+    }
+    let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let root: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    let already_registered = root
+        .get("mcpServers")
+        .and_then(|v| v.as_object())
+        .map(|m| m.contains_key("clauge-workspace"))
+        .unwrap_or(false);
+    if !already_registered {
+        return Ok(());
+    }
+    register_claude_code(port, token)
+}
+
+/// Best-effort auto-start, called from `lib.rs setup()` on app boot.
+/// Reads persisted port + token, generates a token on first run,
+/// starts the MCP server, persists the bound port if fallback kicked
+/// in, and registers `~/.claude.json`. Skipped entirely when the
+/// user has explicitly set `workspace_mcp_enabled` to "false".
+///
+/// Errors are logged but never bubbled — a failure here must not
+/// stop app boot. The user can always toggle from Settings.
+pub async fn maybe_autostart_mcp(app: tauri::AppHandle, pool: SqlitePool) {
+    // Opt-out: only skip if the user has explicitly disabled.
+    if let Ok(Some(s)) = settings_repo::get_by_key(&pool, "workspace_mcp_enabled").await {
+        if s.value.eq_ignore_ascii_case("false") {
+            return;
+        }
+    }
+    let port: u16 = settings_repo::get_by_key(&pool, "workspace_mcp_port")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|s| s.value.parse().ok())
+        .unwrap_or(7421);
+    let token = match settings_repo::get_by_key(&pool, "workspace_mcp_token").await {
+        Ok(Some(s)) => s.value,
+        _ => {
+            let t = uuid::Uuid::new_v4().to_string();
+            let _ = settings_repo::upsert(&pool, "workspace_mcp_token", &t).await;
+            t
+        }
+    };
+    use tauri::Manager;
+    let server_state: tauri::State<'_, McpServerState> = app.state();
+    let mut g = server_state.0.lock().await;
+    if g.is_some() {
+        return; // already running
+    }
+    match mcp::start(pool.clone(), port, token.clone(), Some(app.clone())).await {
+        Ok(handle) => {
+            let bound = handle.port;
+            *g = Some(handle);
+            drop(g);
+            if bound != port {
+                let _ = settings_repo::upsert(&pool, "workspace_mcp_port", &bound.to_string()).await;
+            }
+            // Register on first boot too so a fresh install picks
+            // up the entry without the user opening Settings.
+            let _ = register_claude_code(bound, &token);
+            // Make sure the persisted "enabled" key reflects the
+            // running state — first-boot users default to true.
+            let _ = settings_repo::upsert(&pool, "workspace_mcp_enabled", "true").await;
+            eprintln!("[clauge] workspace MCP server auto-started on 127.0.0.1:{bound}");
+        }
+        Err(e) => {
+            eprintln!("[clauge] workspace MCP auto-start failed: {e}");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
