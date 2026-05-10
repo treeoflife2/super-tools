@@ -110,6 +110,7 @@ pub async fn drawer_chat_turn(
         body,
         None,
         &now,
+        repo::MutationGuard::default(),
     )
     .await
     .map_err(|e| format!("DB error inserting user comment: {e}"))?;
@@ -239,6 +240,7 @@ pub async fn drawer_chat_turn(
         &response,
         None,
         &reply_now,
+        repo::MutationGuard::default(),
     )
     .await
     .map_err(|e| format!("DB error inserting agent reply: {e}"))?;
@@ -351,7 +353,7 @@ pub async fn start_work(
         "**Work started.**\n\n- Branch: `{branch}`\n- Worktree: `{worktree_path}`\n\nFurther \
          agent runs on this card will use this worktree."
     );
-    let _ = repo::insert_card_comment(pool, &cid, card_id, actor, None, &body, None, &now).await;
+    let _ = repo::insert_card_comment(pool, &cid, card_id, actor, None, &body, None, &now, repo::MutationGuard::default()).await;
 
     Ok(super::commands::StartWorkResult {
         worktree_path,
@@ -456,7 +458,7 @@ async fn auto_advance_to_active(
     if target_id == cur_col_id {
         return Ok(());
     }
-    repo::move_card(pool, card_id, &target_id, 0, 0, actor, now).await?;
+    repo::move_card(pool, card_id, &target_id, 0, 0, actor, now, repo::MutationGuard::default()).await?;
     Ok(())
 }
 
@@ -473,9 +475,14 @@ async fn create_hidden_session_and_claim(
         pool, card_id, &coworker.id,
     ).await {
         let now = chrono::Utc::now().to_rfc3339();
-        repo::claim_card(pool, card_id, &existing.id, Some(&coworker.id), actor, &now)
+        let claimed = repo::claim_card(pool, card_id, &existing.id, Some(&coworker.id), actor, &now)
             .await
             .map_err(|e| format!("DB error claiming card: {e}"))?;
+        if !claimed {
+            return Err(
+                "Card was claimed by another session between the lookup and the claim. Try again.".into(),
+            );
+        }
         return Ok(existing);
     }
 
@@ -510,9 +517,14 @@ async fn create_hidden_session_and_claim(
     .await
     .map_err(|e| format!("DB error creating hidden session: {e}"))?;
 
-    repo::claim_card(pool, card_id, &session_id, Some(&coworker.id), actor, &now)
+    let claimed = repo::claim_card(pool, card_id, &session_id, Some(&coworker.id), actor, &now)
         .await
         .map_err(|e| format!("DB error claiming card: {e}"))?;
+    if !claimed {
+        return Err(
+            "Card was claimed by another session between the session insert and the claim. Try again.".into(),
+        );
+    }
 
     session_repo::get_session_by_id(pool, &session_id)
         .await

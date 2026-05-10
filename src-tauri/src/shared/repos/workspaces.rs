@@ -19,6 +19,98 @@ pub const DEFAULT_BOARD_COLUMNS: &[(&str, &str)] = &[
     ("Done", "#2ee08a"),
 ];
 
+/// Preconditions a mutation must satisfy before the row is touched.
+/// Caller-supplied so UI calls can blast through (default), while MCP
+/// calls can opt into freeze enforcement and optimistic concurrency.
+/// All mutating helpers that accept a guard return `rows_affected`;
+/// `0` means a precondition wasn't met (call `diagnose_card_failure`
+/// or `diagnose_note_failure` for the reason).
+#[derive(Default, Clone, Copy)]
+pub struct MutationGuard<'a> {
+    /// When `Some`, the row's `updated_at` must match exactly. Drives
+    /// optimistic concurrency: agents pass the value they just read,
+    /// and a concurrent write makes the precondition fail.
+    pub expected_updated_at: Option<&'a str>,
+    /// When `true`, the row's `frozen` column must be `0`. Lets the
+    /// MCP layer enforce the freeze atomically with the mutation
+    /// instead of via a TOCTOU pre-check.
+    pub respect_frozen: bool,
+}
+
+/// Why a mutation with `rows_affected == 0` failed. Returned by the
+/// diagnostic helpers so callers can produce a precise error message
+/// without a second query each.
+pub enum MutationFailureReason {
+    NotFound,
+    Frozen,
+    Conflict { current_updated_at: String },
+    /// Lost the race between UPDATE and diagnosis (rare). Caller can
+    /// retry or treat as `NotFound`.
+    Unknown,
+}
+
+/// Inspect a card and decide why a guarded mutation returned 0 rows.
+pub async fn diagnose_card_failure(
+    pool: &SqlitePool,
+    card_id: &str,
+    guard: MutationGuard<'_>,
+) -> Result<MutationFailureReason, sqlx::Error> {
+    let row: Option<(i64, String)> = sqlx::query_as(
+        "SELECT frozen, updated_at FROM workspace_board_cards WHERE id = ?",
+    )
+    .bind(card_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(match row {
+        None => MutationFailureReason::NotFound,
+        Some((frozen, _)) if guard.respect_frozen && frozen != 0 => MutationFailureReason::Frozen,
+        Some((_, updated_at)) => match guard.expected_updated_at {
+            Some(expected) if expected != updated_at => {
+                MutationFailureReason::Conflict { current_updated_at: updated_at }
+            }
+            _ => MutationFailureReason::Unknown,
+        },
+    })
+}
+
+/// Inspect a note and decide why a guarded mutation returned 0 rows.
+pub async fn diagnose_note_failure(
+    pool: &SqlitePool,
+    note_id: &str,
+    guard: MutationGuard<'_>,
+) -> Result<MutationFailureReason, sqlx::Error> {
+    let row: Option<(i64, String)> = sqlx::query_as(
+        "SELECT frozen, updated_at FROM workspace_notes WHERE id = ?",
+    )
+    .bind(note_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(match row {
+        None => MutationFailureReason::NotFound,
+        Some((frozen, _)) if guard.respect_frozen && frozen != 0 => MutationFailureReason::Frozen,
+        Some((_, updated_at)) => match guard.expected_updated_at {
+            Some(expected) if expected != updated_at => {
+                MutationFailureReason::Conflict { current_updated_at: updated_at }
+            }
+            _ => MutationFailureReason::Unknown,
+        },
+    })
+}
+
+/// Compose the optional precondition tail for a guarded UPDATE on a
+/// `workspace_board_cards` / `workspace_notes` row. Caller binds
+/// `expected_updated_at` after the row id when it's `Some`.
+fn guard_clause(guard: MutationGuard<'_>) -> String {
+    let mut s = String::new();
+    if guard.respect_frozen {
+        s.push_str(" AND frozen = 0");
+    }
+    if guard.expected_updated_at.is_some() {
+        s.push_str(" AND updated_at = ?");
+    }
+    s
+}
+
 // ---------------------------------------------------------------------------
 // workspaces
 // ---------------------------------------------------------------------------
@@ -205,23 +297,27 @@ pub async fn update_note(
     linked_session_id: Option<&str>,
     actor: &str,
     now: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    guard: MutationGuard<'_>,
+) -> Result<u64, sqlx::Error> {
+    let sql = format!(
         "UPDATE workspace_notes \
          SET title = ?, content = ?, tags = ?, linked_session_id = ?, \
              updated_at = ?, updated_by = ? \
-         WHERE id = ?",
-    )
-    .bind(title)
-    .bind(content)
-    .bind(tags_json)
-    .bind(linked_session_id)
-    .bind(now)
-    .bind(actor)
-    .bind(id)
-    .execute(pool)
-    .await?;
-    Ok(())
+         WHERE id = ?{}",
+        guard_clause(guard)
+    );
+    let mut q = sqlx::query(&sql)
+        .bind(title)
+        .bind(content)
+        .bind(tags_json)
+        .bind(linked_session_id)
+        .bind(now)
+        .bind(actor)
+        .bind(id);
+    if let Some(eu) = guard.expected_updated_at {
+        q = q.bind(eu);
+    }
+    Ok(q.execute(pool).await?.rows_affected())
 }
 
 pub async fn delete_note(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
@@ -452,26 +548,30 @@ pub async fn update_card(
     coworker_id: Option<&str>,
     actor: &str,
     now: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    guard: MutationGuard<'_>,
+) -> Result<u64, sqlx::Error> {
+    let sql = format!(
         "UPDATE workspace_board_cards \
          SET title = ?, description = ?, priority = ?, tags = ?, \
              review_checklist = ?, updated_at = ?, updated_by = ?, \
              updated_by_coworker_id = ? \
-         WHERE id = ?",
-    )
-    .bind(title)
-    .bind(description)
-    .bind(priority)
-    .bind(tags_json)
-    .bind(review_checklist)
-    .bind(now)
-    .bind(actor)
-    .bind(coworker_id)
-    .bind(id)
-    .execute(pool)
-    .await?;
-    Ok(())
+         WHERE id = ?{}",
+        guard_clause(guard)
+    );
+    let mut q = sqlx::query(&sql)
+        .bind(title)
+        .bind(description)
+        .bind(priority)
+        .bind(tags_json)
+        .bind(review_checklist)
+        .bind(now)
+        .bind(actor)
+        .bind(coworker_id)
+        .bind(id);
+    if let Some(eu) = guard.expected_updated_at {
+        q = q.bind(eu);
+    }
+    Ok(q.execute(pool).await?.rows_affected())
 }
 
 /// Move a card to a new column + position. Sets `review_pending` to 1
@@ -486,22 +586,26 @@ pub async fn move_card(
     review_pending: i32,
     actor: &str,
     now: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    guard: MutationGuard<'_>,
+) -> Result<u64, sqlx::Error> {
+    let sql = format!(
         "UPDATE workspace_board_cards \
          SET column_id = ?, position = ?, review_pending = ?, \
              updated_at = ?, updated_by = ? \
-         WHERE id = ?",
-    )
-    .bind(column_id)
-    .bind(position)
-    .bind(review_pending)
-    .bind(now)
-    .bind(actor)
-    .bind(id)
-    .execute(pool)
-    .await?;
-    Ok(())
+         WHERE id = ?{}",
+        guard_clause(guard)
+    );
+    let mut q = sqlx::query(&sql)
+        .bind(column_id)
+        .bind(position)
+        .bind(review_pending)
+        .bind(now)
+        .bind(actor)
+        .bind(id);
+    if let Some(eu) = guard.expected_updated_at {
+        q = q.bind(eu);
+    }
+    Ok(q.execute(pool).await?.rows_affected())
 }
 
 pub async fn clear_review_pending(
@@ -509,18 +613,19 @@ pub async fn clear_review_pending(
     id: &str,
     actor: &str,
     now: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    guard: MutationGuard<'_>,
+) -> Result<u64, sqlx::Error> {
+    let sql = format!(
         "UPDATE workspace_board_cards \
          SET review_pending = 0, updated_at = ?, updated_by = ? \
-         WHERE id = ?",
-    )
-    .bind(now)
-    .bind(actor)
-    .bind(id)
-    .execute(pool)
-    .await?;
-    Ok(())
+         WHERE id = ?{}",
+        guard_clause(guard)
+    );
+    let mut q = sqlx::query(&sql).bind(now).bind(actor).bind(id);
+    if let Some(eu) = guard.expected_updated_at {
+        q = q.bind(eu);
+    }
+    Ok(q.execute(pool).await?.rows_affected())
 }
 
 /// Delete a card. Two side effects worth knowing about:
@@ -859,13 +964,19 @@ pub async fn update_note_linked_session(
     session_id: Option<&str>,
     actor: &str,
     now: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE workspace_notes SET linked_session_id = ?, updated_at = ?, updated_by = ? WHERE id = ?",
-    )
-    .bind(session_id).bind(now).bind(actor).bind(id)
-    .execute(pool).await?;
-    Ok(())
+    guard: MutationGuard<'_>,
+) -> Result<u64, sqlx::Error> {
+    let sql = format!(
+        "UPDATE workspace_notes \
+         SET linked_session_id = ?, updated_at = ?, updated_by = ? \
+         WHERE id = ?{}",
+        guard_clause(guard)
+    );
+    let mut q = sqlx::query(&sql).bind(session_id).bind(now).bind(actor).bind(id);
+    if let Some(eu) = guard.expected_updated_at {
+        q = q.bind(eu);
+    }
+    Ok(q.execute(pool).await?.rows_affected())
 }
 
 pub async fn update_card_linked_session(
@@ -874,13 +985,19 @@ pub async fn update_card_linked_session(
     session_id: Option<&str>,
     actor: &str,
     now: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE workspace_board_cards SET linked_session_id = ?, updated_at = ?, updated_by = ? WHERE id = ?",
-    )
-    .bind(session_id).bind(now).bind(actor).bind(id)
-    .execute(pool).await?;
-    Ok(())
+    guard: MutationGuard<'_>,
+) -> Result<u64, sqlx::Error> {
+    let sql = format!(
+        "UPDATE workspace_board_cards \
+         SET linked_session_id = ?, updated_at = ?, updated_by = ? \
+         WHERE id = ?{}",
+        guard_clause(guard)
+    );
+    let mut q = sqlx::query(&sql).bind(session_id).bind(now).bind(actor).bind(id);
+    if let Some(eu) = guard.expected_updated_at {
+        q = q.bind(eu);
+    }
+    Ok(q.execute(pool).await?.rows_affected())
 }
 
 /// Stamp a PR / MR URL onto a card. Set after `cards_raise_pr`
@@ -892,13 +1009,19 @@ pub async fn update_card_pr_url(
     pr_url: &str,
     actor: &str,
     now: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE workspace_board_cards SET pr_url = ?, updated_at = ?, updated_by = ? WHERE id = ?",
-    )
-    .bind(pr_url).bind(now).bind(actor).bind(id)
-    .execute(pool).await?;
-    Ok(())
+    guard: MutationGuard<'_>,
+) -> Result<u64, sqlx::Error> {
+    let sql = format!(
+        "UPDATE workspace_board_cards \
+         SET pr_url = ?, updated_at = ?, updated_by = ? \
+         WHERE id = ?{}",
+        guard_clause(guard)
+    );
+    let mut q = sqlx::query(&sql).bind(pr_url).bind(now).bind(actor).bind(id);
+    if let Some(eu) = guard.expected_updated_at {
+        q = q.bind(eu);
+    }
+    Ok(q.execute(pool).await?.rows_affected())
 }
 
 // ---------------------------------------------------------------------------
@@ -916,27 +1039,44 @@ pub async fn insert_card_comment(
     body: &str,
     parent_id: Option<&str>,
     now: &str,
-) -> Result<(), sqlx::Error> {
-    // Insert the row, then bump the parent card's updated_at + updated_by.
-    // Two separate statements (no transaction) is fine — the FK ensures the
-    // card exists; if the second fails, the comment still got written.
-    sqlx::query(
+    guard: MutationGuard<'_>,
+) -> Result<u64, sqlx::Error> {
+    // INSERT … SELECT … WHERE EXISTS lets us refuse atomically when
+    // the parent card is frozen (no separate TOCTOU pre-check). When
+    // the guard's freeze bit is off, the EXISTS clause matches any
+    // card row.
+    let exists_clause = if guard.respect_frozen {
+        "AND frozen = 0"
+    } else {
+        ""
+    };
+    let sql = format!(
         "INSERT INTO workspace_card_comments \
          (id, card_id, actor, coworker_id, body, parent_id, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(id)
-    .bind(card_id)
-    .bind(actor)
-    .bind(coworker_id)
-    .bind(body)
-    .bind(parent_id)
-    .bind(now)
-    .execute(pool)
-    .await?;
+         SELECT ?, ?, ?, ?, ?, ?, ? \
+         WHERE EXISTS (SELECT 1 FROM workspace_board_cards WHERE id = ? {})",
+        exists_clause
+    );
+    let inserted = sqlx::query(&sql)
+        .bind(id)
+        .bind(card_id)
+        .bind(actor)
+        .bind(coworker_id)
+        .bind(body)
+        .bind(parent_id)
+        .bind(now)
+        .bind(card_id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    if inserted == 0 {
+        return Ok(0);
+    }
     // Mirror the card's last-touch metadata so the inbox + per-card
     // unread tracking pick up comment activity without needing a
-    // separate query path.
+    // separate query path. We just verified the card exists and (when
+    // guarded) is not frozen, so a second freeze guard here would be
+    // redundant.
     sqlx::query(
         "UPDATE workspace_board_cards \
          SET updated_at = ?, updated_by = ? \
@@ -947,7 +1087,7 @@ pub async fn insert_card_comment(
     .bind(card_id)
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(inserted)
 }
 
 pub async fn list_card_comments(
@@ -981,6 +1121,11 @@ pub async fn delete_card_comment(pool: &SqlitePool, id: &str) -> Result<(), sqlx
 /// Claim a card: set both the active session and the coworker (persona)
 /// owning the conversation. Pass `coworker_id = None` for terminal-side
 /// claims that don't have a persona today.
+/// Atomically claim an unclaimed, non-frozen card for `session_id`.
+/// Returns `true` when the claim was set. `false` means the card is
+/// already claimed by someone (or doesn't exist / is frozen) — caller
+/// should re-read the row and decide whether to error or no-op
+/// (e.g. "same session re-claiming" is idempotent).
 pub async fn claim_card(
     pool: &SqlitePool,
     card_id: &str,
@@ -988,12 +1133,12 @@ pub async fn claim_card(
     coworker_id: Option<&str>,
     actor: &str,
     now: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
+) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query(
         "UPDATE workspace_board_cards \
          SET claimed_session_id = ?, claimed_coworker_id = ?, \
              updated_at = ?, updated_by = ? \
-         WHERE id = ?",
+         WHERE id = ? AND claimed_session_id IS NULL AND frozen = 0",
     )
     .bind(session_id)
     .bind(coworker_id)
@@ -1002,7 +1147,7 @@ pub async fn claim_card(
     .bind(card_id)
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(r.rows_affected() > 0)
 }
 
 pub async fn release_card(

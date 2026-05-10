@@ -278,14 +278,15 @@ fn tool_descriptors() -> Value {
         },
         {
             "name": "notes_update",
-            "description": "Update an existing note. Pass any of title, content, tags.",
+            "description": "Update an existing note. Pass any of title, content, tags. Pass the note's current `updatedAt` as `expectedUpdatedAt` to refuse the write if the note was modified concurrently.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "id": { "type": "string" },
-                    "title": { "type": "string" },
-                    "content": { "type": "string" },
-                    "tags": { "type": "array", "items": { "type": "string" } }
+                    "id":                 { "type": "string" },
+                    "title":              { "type": "string" },
+                    "content":            { "type": "string" },
+                    "tags":               { "type": "array", "items": { "type": "string" } },
+                    "expectedUpdatedAt":  { "type": "string", "description": "Optional. The `updatedAt` you read on this note. If it no longer matches, the call returns a conflict error so you can re-read and retry." }
                 },
                 "required": ["id"]
             }
@@ -327,17 +328,18 @@ fn tool_descriptors() -> Value {
         },
         {
             "name": "cards_update",
-            "description": "Update a card's title, description, priority, tags, or review checklist. Pass `coworkerId` to record which persona made the change.",
+            "description": "Update a card's title, description, priority, tags, or review checklist. Pass `coworkerId` to record which persona made the change. Pass the card's current `updatedAt` as `expectedUpdatedAt` to refuse the write if the card was modified concurrently.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "id":              { "type": "string" },
-                    "title":           { "type": "string" },
-                    "description":     { "type": "string" },
-                    "priority":        { "type": "string" },
-                    "tags":            { "type": "array", "items": { "type": "string" } },
-                    "reviewChecklist": { "type": "string" },
-                    "coworkerId":      { "type": "string" }
+                    "id":                { "type": "string" },
+                    "title":             { "type": "string" },
+                    "description":       { "type": "string" },
+                    "priority":          { "type": "string" },
+                    "tags":              { "type": "array", "items": { "type": "string" } },
+                    "reviewChecklist":   { "type": "string" },
+                    "coworkerId":        { "type": "string" },
+                    "expectedUpdatedAt": { "type": "string", "description": "Optional. The `updatedAt` you read on this card. If it no longer matches, the call returns a conflict error so you can re-read and retry." }
                 },
                 "required": ["id"]
             }
@@ -800,7 +802,7 @@ async fn auto_link_card_to_recent_session(
     }
     // Best-effort write — if it fails (deleted card race, etc.) we
     // silently skip; the original mutation already succeeded.
-    let _ = repo::update_card_linked_session(pool, card_id, Some(&session.id), actor, now).await;
+    let _ = repo::update_card_linked_session(pool, card_id, Some(&session.id), actor, now, repo::MutationGuard::default()).await;
 }
 
 /// Sibling of `auto_link_card_to_recent_session`, scoped to notes.
@@ -839,7 +841,7 @@ async fn auto_link_note_to_recent_session(
     if current_link.as_deref() == Some(session.id.as_str()) {
         return;
     }
-    let _ = repo::update_note_linked_session(pool, note_id, Some(&session.id), actor, now).await;
+    let _ = repo::update_note_linked_session(pool, note_id, Some(&session.id), actor, now, repo::MutationGuard::default()).await;
 }
 
 /// Wrap a value as MCP tool-call content. Single text item — clients
@@ -851,6 +853,47 @@ fn ok_text(value: Value) -> Value {
         ],
         "isError": false
     })
+}
+
+/// Translate a guarded mutation that returned 0 rows into a precise
+/// MCP error. Saves every arm from spelling out the same diagnose →
+/// match → format dance.
+async fn diagnose_card_or_err(
+    pool: &SqlitePool,
+    card_id: &str,
+    guard: repo::MutationGuard<'_>,
+) -> (i32, String) {
+    match repo::diagnose_card_failure(pool, card_id, guard).await {
+        Ok(repo::MutationFailureReason::NotFound) => (-32602, "Card not found".into()),
+        Ok(repo::MutationFailureReason::Frozen) => (-32000, "Card is frozen".into()),
+        Ok(repo::MutationFailureReason::Conflict { current_updated_at }) => (
+            -32000,
+            format!("Card was modified concurrently. Current updated_at: {current_updated_at}"),
+        ),
+        Ok(repo::MutationFailureReason::Unknown) => {
+            (-32000, "Card mutation failed (no rows affected)".into())
+        }
+        Err(e) => (-32603, format!("DB error: {e}")),
+    }
+}
+
+async fn diagnose_note_or_err(
+    pool: &SqlitePool,
+    note_id: &str,
+    guard: repo::MutationGuard<'_>,
+) -> (i32, String) {
+    match repo::diagnose_note_failure(pool, note_id, guard).await {
+        Ok(repo::MutationFailureReason::NotFound) => (-32602, "Note not found".into()),
+        Ok(repo::MutationFailureReason::Frozen) => (-32000, "Note is frozen".into()),
+        Ok(repo::MutationFailureReason::Conflict { current_updated_at }) => (
+            -32000,
+            format!("Note was modified concurrently. Current updated_at: {current_updated_at}"),
+        ),
+        Ok(repo::MutationFailureReason::Unknown) => {
+            (-32000, "Note mutation failed (no rows affected)".into())
+        }
+        Err(e) => (-32603, format!("DB error: {e}")),
+    }
 }
 
 async fn dispatch_tool(
@@ -967,6 +1010,7 @@ async fn dispatch_tool(
                     repo::update_note(
                         pool, &cur.id, &title, &merged_content, &tags_json,
                         cur.linked_session_id.as_deref(), actor, &now,
+                        repo::MutationGuard { respect_frozen: true, expected_updated_at: None },
                     )
                     .await
                     .map_err(map_db)?;
@@ -1007,22 +1051,26 @@ async fn dispatch_tool(
         }
         "notes_update" => {
             let id = req_str("id")?;
-            // Frozen → reject. UI is the only path to edit a frozen note.
-            if repo::is_note_frozen(pool, &id).await.map_err(map_db)? {
-                return Err((-32000, "Note is frozen".into()));
-            }
             // Read existing so we can patch only the fields the agent passed.
             let cur = repo::get_note_by_id(pool, &id).await.map_err(map_db)?;
-            let title = str_arg("title").unwrap_or(cur.title);
-            let content = str_arg("content").unwrap_or(cur.content);
+            let title = str_arg("title").unwrap_or_else(|| cur.title.clone());
+            let content = str_arg("content").unwrap_or_else(|| cur.content.clone());
             let tags_json = if args.get("tags").is_some() {
                 serde_json::to_string(&str_array("tags")).unwrap_or("[]".into())
             } else {
-                cur.tags
+                cur.tags.clone()
             };
-            repo::update_note(pool, &id, &title, &content, &tags_json,
-                cur.linked_session_id.as_deref(), actor, &now)
+            let expected_updated_at = str_arg("expectedUpdatedAt");
+            let guard = repo::MutationGuard {
+                respect_frozen: true,
+                expected_updated_at: expected_updated_at.as_deref(),
+            };
+            let rows = repo::update_note(pool, &id, &title, &content, &tags_json,
+                cur.linked_session_id.as_deref(), actor, &now, guard)
                 .await.map_err(map_db)?;
+            if rows == 0 {
+                return Err(diagnose_note_or_err(pool, &id, guard).await);
+            }
             auto_link_note_to_recent_session(pool, &id, actor, &now).await;
             let v = repo::get_note_by_id(pool, &id).await.map_err(map_db)?;
             Ok(ok_text(serde_json::to_value(v).unwrap_or(Value::Null)))
@@ -1066,9 +1114,6 @@ async fn dispatch_tool(
         }
         "cards_update" => {
             let id = req_str("id")?;
-            if repo::is_card_frozen(pool, &id).await.map_err(map_db)? {
-                return Err((-32000, "Card is frozen".into()));
-            }
             let row: Option<(String, String, Option<String>, String, Option<String>)> =
                 sqlx::query_as(
                     "SELECT title, description, priority, tags, review_checklist \
@@ -1094,21 +1139,26 @@ async fn dispatch_tool(
                 cur_check
             };
             let coworker_id = str_arg("coworkerId");
-            repo::update_card(
+            let expected_updated_at = str_arg("expectedUpdatedAt");
+            let guard = repo::MutationGuard {
+                respect_frozen: true,
+                expected_updated_at: expected_updated_at.as_deref(),
+            };
+            let rows = repo::update_card(
                 pool, &id, &title, &description, priority.as_deref(),
                 &tags_json, review_checklist.as_deref(),
                 coworker_id.as_deref(),
-                actor, &now,
+                actor, &now, guard,
             )
             .await.map_err(map_db)?;
+            if rows == 0 {
+                return Err(diagnose_card_or_err(pool, &id, guard).await);
+            }
             auto_link_card_to_recent_session(pool, &id, actor, &now).await;
             Ok(ok_text(json!({ "id": id, "ok": true })))
         }
         "cards_move" => {
             let id = req_str("id")?;
-            if repo::is_card_frozen(pool, &id).await.map_err(map_db)? {
-                return Err((-32000, "Card is frozen".into()));
-            }
             let column_id = req_str("columnId")?;
             let position = args.get("position").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             // Reuse the same review-flag rule the Tauri command applies:
@@ -1122,15 +1172,16 @@ async fn dispatch_tool(
                 .await
                 .map_err(map_db)?;
                 match row {
-                    // Same matcher as commands.rs — strict "review"
-                    // column (not "in review", which is the active-
-                    // work column).
                     Some((name,)) if super::commands::is_review_only_column(&name) => 1,
                     _ => 0,
                 }
             };
-            repo::move_card(pool, &id, &column_id, position, review_pending, actor, &now)
+            let guard = repo::MutationGuard { respect_frozen: true, expected_updated_at: None };
+            let rows = repo::move_card(pool, &id, &column_id, position, review_pending, actor, &now, guard)
                 .await.map_err(map_db)?;
+            if rows == 0 {
+                return Err(diagnose_card_or_err(pool, &id, guard).await);
+            }
             auto_link_card_to_recent_session(pool, &id, actor, &now).await;
             Ok(ok_text(json!({ "id": id, "ok": true, "reviewPending": review_pending == 1 })))
         }
@@ -1159,9 +1210,7 @@ async fn dispatch_tool(
 
         "cards_approve" => {
             let id = req_str("id")?;
-            if repo::is_card_frozen(pool, &id).await.map_err(map_db)? {
-                return Err((-32000, "Card is frozen".into()));
-            }
+            let guard = repo::MutationGuard { respect_frozen: true, expected_updated_at: None };
             // Approval comment lands as a regular comment row. The
             // semantics ("this was an approval") are conveyed by the
             // tool name + the review_pending=0 transition, not by
@@ -1169,25 +1218,32 @@ async fn dispatch_tool(
             if let Some(comment) = str_arg("comment") {
                 if !comment.trim().is_empty() {
                     let cid = new_id();
-                    repo::insert_card_comment(pool, &cid, &id, actor, None, comment.trim(), None, &now)
+                    let rows = repo::insert_card_comment(pool, &cid, &id, actor, None, comment.trim(), None, &now, guard)
                         .await.map_err(map_db)?;
+                    if rows == 0 {
+                        return Err(diagnose_card_or_err(pool, &id, guard).await);
+                    }
                 }
             }
-            repo::clear_review_pending(pool, &id, actor, &now).await.map_err(map_db)?;
+            let rows = repo::clear_review_pending(pool, &id, actor, &now, guard).await.map_err(map_db)?;
+            if rows == 0 {
+                return Err(diagnose_card_or_err(pool, &id, guard).await);
+            }
             auto_link_card_to_recent_session(pool, &id, actor, &now).await;
             Ok(ok_text(json!({ "id": id, "ok": true, "reviewPending": false })))
         }
         "cards_request_changes" => {
             let id = req_str("id")?;
-            if repo::is_card_frozen(pool, &id).await.map_err(map_db)? {
-                return Err((-32000, "Card is frozen".into()));
-            }
+            let guard = repo::MutationGuard { respect_frozen: true, expected_updated_at: None };
             let feedback = req_str("feedback")?;
             let trimmed = feedback.trim();
             if !trimmed.is_empty() {
                 let cid = new_id();
-                repo::insert_card_comment(pool, &cid, &id, actor, None, trimmed, None, &now)
+                let rows = repo::insert_card_comment(pool, &cid, &id, actor, None, trimmed, None, &now, guard)
                     .await.map_err(map_db)?;
+                if rows == 0 {
+                    return Err(diagnose_card_or_err(pool, &id, guard).await);
+                }
             }
             // Optional move first (so the column-name review check sees
             // the new column), then clear the pending flag explicitly.
@@ -1195,11 +1251,17 @@ async fn dispatch_tool(
                 let position = args.get("position")
                     .and_then(|v| v.as_i64()).unwrap_or(0) as i32;
                 // Move with review_pending=0 — we're explicitly leaving review.
-                repo::move_card(pool, &id, &column_id, position, 0, actor, &now)
+                let rows = repo::move_card(pool, &id, &column_id, position, 0, actor, &now, guard)
                     .await.map_err(map_db)?;
+                if rows == 0 {
+                    return Err(diagnose_card_or_err(pool, &id, guard).await);
+                }
             } else {
-                repo::clear_review_pending(pool, &id, actor, &now)
+                let rows = repo::clear_review_pending(pool, &id, actor, &now, guard)
                     .await.map_err(map_db)?;
+                if rows == 0 {
+                    return Err(diagnose_card_or_err(pool, &id, guard).await);
+                }
             }
             auto_link_card_to_recent_session(pool, &id, actor, &now).await;
             Ok(ok_text(json!({ "id": id, "ok": true })))
@@ -1255,9 +1317,6 @@ async fn dispatch_tool(
 
         "notes_append_section" => {
             let id = req_str("id")?;
-            if repo::is_note_frozen(pool, &id).await.map_err(map_db)? {
-                return Err((-32000, "Note is frozen".into()));
-            }
             let heading = req_str("heading")?;
             let body = req_str("content")?;
             let cur = repo::get_note_by_id(pool, &id).await.map_err(map_db)?;
@@ -1267,18 +1326,19 @@ async fn dispatch_tool(
             } else {
                 format!("{}\n\n{}", cur.content.trim_end(), section)
             };
-            repo::update_note(pool, &id, &cur.title, &merged, &cur.tags,
-                cur.linked_session_id.as_deref(), actor, &now)
+            let guard = repo::MutationGuard { respect_frozen: true, expected_updated_at: None };
+            let rows = repo::update_note(pool, &id, &cur.title, &merged, &cur.tags,
+                cur.linked_session_id.as_deref(), actor, &now, guard)
                 .await.map_err(map_db)?;
+            if rows == 0 {
+                return Err(diagnose_note_or_err(pool, &id, guard).await);
+            }
             auto_link_note_to_recent_session(pool, &id, actor, &now).await;
             let v = repo::get_note_by_id(pool, &id).await.map_err(map_db)?;
             Ok(ok_text(serde_json::to_value(v).unwrap_or(Value::Null)))
         }
         "notes_apply_diff" => {
             let id = req_str("id")?;
-            if repo::is_note_frozen(pool, &id).await.map_err(map_db)? {
-                return Err((-32000, "Note is frozen".into()));
-            }
             let find = req_str("find")?;
             let replace = req_str("replace")?;
             let cur = repo::get_note_by_id(pool, &id).await.map_err(map_db)?;
@@ -1295,9 +1355,13 @@ async fn dispatch_tool(
                 )));
             }
             let next = cur.content.replacen(&find, &replace, 1);
-            repo::update_note(pool, &id, &cur.title, &next, &cur.tags,
-                cur.linked_session_id.as_deref(), actor, &now)
+            let guard = repo::MutationGuard { respect_frozen: true, expected_updated_at: None };
+            let rows = repo::update_note(pool, &id, &cur.title, &next, &cur.tags,
+                cur.linked_session_id.as_deref(), actor, &now, guard)
                 .await.map_err(map_db)?;
+            if rows == 0 {
+                return Err(diagnose_note_or_err(pool, &id, guard).await);
+            }
             auto_link_note_to_recent_session(pool, &id, actor, &now).await;
             let v = repo::get_note_by_id(pool, &id).await.map_err(map_db)?;
             Ok(ok_text(serde_json::to_value(v).unwrap_or(Value::Null)))
@@ -1384,23 +1448,25 @@ async fn dispatch_tool(
 
         "notes_link_to_session" => {
             let id = req_str("id")?;
-            if repo::is_note_frozen(pool, &id).await.map_err(map_db)? {
-                return Err((-32000, "Note is frozen".into()));
-            }
             let session_id = str_arg("sessionId");
-            repo::update_note_linked_session(pool, &id, session_id.as_deref(), actor, &now)
+            let guard = repo::MutationGuard { respect_frozen: true, expected_updated_at: None };
+            let rows = repo::update_note_linked_session(pool, &id, session_id.as_deref(), actor, &now, guard)
                 .await.map_err(map_db)?;
+            if rows == 0 {
+                return Err(diagnose_note_or_err(pool, &id, guard).await);
+            }
             let v = repo::get_note_by_id(pool, &id).await.map_err(map_db)?;
             Ok(ok_text(serde_json::to_value(v).unwrap_or(Value::Null)))
         }
         "cards_link_to_session" => {
             let id = req_str("id")?;
-            if repo::is_card_frozen(pool, &id).await.map_err(map_db)? {
-                return Err((-32000, "Card is frozen".into()));
-            }
             let session_id = str_arg("sessionId");
-            repo::update_card_linked_session(pool, &id, session_id.as_deref(), actor, &now)
+            let guard = repo::MutationGuard { respect_frozen: true, expected_updated_at: None };
+            let rows = repo::update_card_linked_session(pool, &id, session_id.as_deref(), actor, &now, guard)
                 .await.map_err(map_db)?;
+            if rows == 0 {
+                return Err(diagnose_card_or_err(pool, &id, guard).await);
+            }
             Ok(ok_text(json!({ "id": id, "ok": true })))
         }
 
@@ -1452,9 +1518,6 @@ async fn dispatch_tool(
 
         "cards_add_comment" => {
             let id = req_str("id")?;
-            if repo::is_card_frozen(pool, &id).await.map_err(map_db)? {
-                return Err((-32000, "Card is frozen".into()));
-            }
             let body = req_str("body")?;
             let trimmed = body.trim();
             if trimmed.is_empty() {
@@ -1462,12 +1525,16 @@ async fn dispatch_tool(
             }
             let coworker_id = str_arg("coworkerId");
             let comment_id = new_id();
-            repo::insert_card_comment(
+            let guard = repo::MutationGuard { respect_frozen: true, expected_updated_at: None };
+            let rows = repo::insert_card_comment(
                 pool, &comment_id, &id, actor,
                 coworker_id.as_deref(),
-                trimmed, None, &now,
+                trimmed, None, &now, guard,
             )
             .await.map_err(map_db)?;
+            if rows == 0 {
+                return Err(diagnose_card_or_err(pool, &id, guard).await);
+            }
             auto_link_card_to_recent_session(pool, &id, actor, &now).await;
             Ok(ok_text(json!({
                 "id": comment_id,
@@ -1541,33 +1608,44 @@ async fn dispatch_tool(
             // Terminal-side claim. We don't get the agent's session id
             // over the wire, so we use the same auto-link heuristic to
             // resolve "the most recent session for this card's project"
-            // and stamp it as the claimer. Errors when:
-            //   • Card not found / no project_path bound
-            //   • Card already claimed by a *different* session
-            //   • No matching agent session exists yet (agent must
-            //     have been launched in Agent mode at least once)
+            // and stamp it as the claimer. claim_card is atomic — only
+            // one parallel call wins; the rest fall through to the
+            // diagnostic branch which decides "same session" (idempotent
+            // success) vs "different session" (error).
             let id = req_str("id")?;
             let row = repo::get_card_claim_and_project(pool, &id)
                 .await.map_err(map_db)?
                 .ok_or((-32602, "Card not found".into()))?;
-            let (existing_session, _existing_coworker, project_path_opt) = row;
+            let (_existing_session, _existing_coworker, project_path_opt) = row;
             let project_path = project_path_opt
                 .filter(|p| !p.trim().is_empty())
                 .ok_or((-32602, "Workspace has no project_path bound".into()))?;
             let calling_session = session_repo::find_recent_session_for_project(pool, &project_path)
                 .await.map_err(map_db)?
                 .ok_or((-32603, "No agent session found for this project — start one in Agent mode first".into()))?;
-            if let Some(existing) = existing_session.as_deref() {
-                if existing != calling_session.id {
-                    return Err((-32000, format!(
-                        "Card is already claimed by session '{}'. Release it first.",
-                        calling_session.title
-                    )));
+            // Terminal claims have no persona — pass None for coworker_id.
+            let claimed = repo::claim_card(pool, &id, &calling_session.id, None, actor, &now)
+                .await.map_err(map_db)?;
+            if !claimed {
+                // Re-read to decide: same session (idempotent) vs different (error).
+                let cur = repo::get_card_claim_and_project(pool, &id)
+                    .await.map_err(map_db)?
+                    .ok_or((-32602, "Card not found".into()))?;
+                match cur.0 {
+                    Some(sid) if sid == calling_session.id => { /* idempotent — fall through */ }
+                    Some(_) => {
+                        return Err((-32000, format!(
+                            "Card is already claimed by another session. Release it first.",
+                        )));
+                    }
+                    None => {
+                        // Either frozen or a fresh race we lost.
+                        return Err(diagnose_card_or_err(
+                            pool, &id,
+                            repo::MutationGuard { respect_frozen: true, expected_updated_at: None },
+                        ).await);
+                    }
                 }
-            } else {
-                // Terminal claims have no persona — pass None for coworker_id.
-                repo::claim_card(pool, &id, &calling_session.id, None, actor, &now)
-                    .await.map_err(map_db)?;
             }
             Ok(ok_text(json!({
                 "id": id,

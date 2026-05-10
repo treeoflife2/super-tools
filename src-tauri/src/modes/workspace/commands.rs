@@ -345,10 +345,15 @@ pub async fn workspace_note_update(
     tags: Vec<String>,
     linked_session_id: Option<String>,
     actor: String,
+    expected_updated_at: Option<String>,
 ) -> Result<(), String> {
     let now = now_rfc3339();
     let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
-    repo::update_note(
+    let guard = repo::MutationGuard {
+        respect_frozen: false,
+        expected_updated_at: expected_updated_at.as_deref(),
+    };
+    let rows = repo::update_note(
         pool.inner(),
         &id,
         &title,
@@ -357,9 +362,22 @@ pub async fn workspace_note_update(
         linked_session_id.as_deref(),
         &actor,
         &now,
+        guard,
     )
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    if rows == 0 {
+        match repo::diagnose_note_failure(pool.inner(), &id, guard).await {
+            Ok(repo::MutationFailureReason::Conflict { current_updated_at }) => {
+                return Err(format!(
+                    "Note was modified concurrently. Current updated_at: {current_updated_at}"
+                ));
+            }
+            Ok(repo::MutationFailureReason::NotFound) => return Err("Note not found".into()),
+            _ => return Err("Note update failed".into()),
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -551,10 +569,15 @@ pub async fn workspace_card_update(
     review_checklist: Option<String>,
     coworker_id: Option<String>,
     actor: String,
+    expected_updated_at: Option<String>,
 ) -> Result<(), String> {
     let now = now_rfc3339();
     let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
-    repo::update_card(
+    let guard = repo::MutationGuard {
+        respect_frozen: false,
+        expected_updated_at: expected_updated_at.as_deref(),
+    };
+    let rows = repo::update_card(
         pool.inner(),
         &id,
         &title,
@@ -565,9 +588,22 @@ pub async fn workspace_card_update(
         coworker_id.as_deref(),
         &actor,
         &now,
+        guard,
     )
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    if rows == 0 {
+        match repo::diagnose_card_failure(pool.inner(), &id, guard).await {
+            Ok(repo::MutationFailureReason::Conflict { current_updated_at }) => {
+                return Err(format!(
+                    "Card was modified concurrently. Current updated_at: {current_updated_at}"
+                ));
+            }
+            Ok(repo::MutationFailureReason::NotFound) => return Err("Card not found".into()),
+            _ => return Err("Card update failed".into()),
+        }
+    }
+    Ok(())
 }
 
 /// Move a card to a column + position. The actor decides whether the
@@ -615,8 +651,10 @@ pub async fn workspace_card_move(
         review_pending,
         &actor,
         &now,
+        repo::MutationGuard::default(),
     )
     .await
+    .map(|_| ())
     .map_err(|e| e.to_string())
 }
 
@@ -627,8 +665,9 @@ pub async fn workspace_card_clear_review(
     actor: String,
 ) -> Result<(), String> {
     let now = now_rfc3339();
-    repo::clear_review_pending(pool.inner(), &id, &actor, &now)
+    repo::clear_review_pending(pool.inner(), &id, &actor, &now, repo::MutationGuard::default())
         .await
+        .map(|_| ())
         .map_err(|e| e.to_string())
 }
 
@@ -869,6 +908,7 @@ pub async fn workspace_card_add_comment(
         trimmed,
         None,
         &now,
+        repo::MutationGuard::default(),
     )
     .await
     .map_err(|e| e.to_string())?;
