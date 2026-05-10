@@ -312,6 +312,54 @@ fn usage_auth_error(stage: &str, status: reqwest::StatusCode) -> String {
     format!("Claude {} request failed with HTTP {}", stage, status)
 }
 
+/// Fetch ChatGPT/Codex live rate-limit usage for the footer chip.
+///
+/// Hits `https://chatgpt.com/backend-api/wham/usage` with the user's
+/// Codex CLI access token (`agent_codex_access_token`). Response shape:
+/// ```json
+/// { "rate_limit": { "primary_window": { "used_percent": 100,
+///                                       "limit_window_seconds": 604800 },
+///                   "secondary_window": { ... } | null },
+///   "plan_type": "go", ... }
+/// ```
+/// Frontend uses `rate_limit.primary_window.used_percent` (and the
+/// optional secondary window) for the StatusBar chips. The full payload
+/// is returned so the Settings UI can surface plan/credits later.
+#[tauri::command]
+pub async fn agent_fetch_codex_usage_limits(access_token: String) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .use_native_tls()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
+
+    let resp = client
+        .get("https://chatgpt.com/backend-api/wham/usage")
+        .header("Accept", "*/*")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("User-Agent", ua)
+        .send()
+        .await
+        .map_err(|e| format!("Codex usage request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(codex_auth_error(resp.status()));
+    }
+
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Codex usage parse failed: {}", e))
+}
+
+fn codex_auth_error(status: reqwest::StatusCode) -> String {
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return "Codex access token is expired or invalid. Reconfigure usage tracking in Settings > Agent.".to_string();
+    }
+    format!("Codex usage request failed with HTTP {}", status)
+}
+
 #[tauri::command]
 pub fn agent_discover_sessions(project_path: String) -> Result<Vec<DiscoveredSession>, String> {
     let cli: &dyn CliRunner = &CLAUDE;

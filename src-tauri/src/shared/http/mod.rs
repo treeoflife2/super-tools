@@ -143,58 +143,40 @@ pub async fn max_response_bytes(pool: &SqlitePool) -> u64 {
     mb.saturating_mul(1024 * 1024)
 }
 
-/// Classify a `reqwest::Error` for the cert-error retry flow on the
-/// frontend. Returns `Some(reason)` when the error chain contains TLS /
-/// certificate hints — the frontend matches on the `ssl-error:` prefix the
-/// caller wraps around this string.
+/// Build a stripped-down HTTP client used solely to probe whether a
+/// failed REST request was caused by TLS cert verification. Mirrors
+/// the proxy settings of the real REST client (so the probe traverses
+/// the same network path) but pins a short timeout, disables redirects,
+/// and turns cert verification OFF.
+async fn build_probe_http_client(pool: &SqlitePool) -> Result<reqwest::Client, String> {
+    let builder = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .danger_accept_invalid_certs(true);
+
+    let builder = apply_proxy(pool, builder).await?;
+
+    builder
+        .build()
+        .map_err(|e| format!("Probe client build failed: {}", e))
+}
+
+/// Probe whether the URL would succeed if cert verification were disabled.
+/// Returns `true` ⇒ the original failure was a TLS cert problem; the caller
+/// should surface the `ssl-error:` prefix so the UI offers the disable-
+/// verification guide.
 ///
-/// Reqwest doesn't expose a typed cert-error variant (the underlying TLS
-/// crate's errors are erased through `Box<dyn Error>`), so we string-match
-/// the chain. Inelegant but stable across rustls/openssl backends.
-pub fn classify_ssl_error(err: &reqwest::Error) -> Option<String> {
-    if !err.is_connect() && !err.is_request() {
-        return None;
-    }
-    let mut text = String::new();
-    let mut src: Option<&dyn std::error::Error> = Some(err);
-    while let Some(e) = src {
-        text.push_str(&e.to_string());
-        text.push('\n');
-        src = e.source();
-    }
-    let lower = text.to_lowercase();
-    let cert_terms = [
-        "certificate verify",
-        "self-signed",
-        "self signed",
-        "unable to get local issuer",
-        "unknown ca",
-        "untrusted",
-        "expired",
-        "hostname mismatch",
-        "subject alt",
-        "tls handshake",
-        "ssl handshake",
-        "invalidcertificate",
-        "invalid_certificate",
-        "badcertificate",
-        "bad_certificate",
-        "certificate error",
-    ];
-    if cert_terms.iter().any(|t| lower.contains(t)) {
-        // Pick the most user-readable reason out of the chain.
-        if lower.contains("self-signed") || lower.contains("self signed") {
-            Some("self-signed certificate".to_string())
-        } else if lower.contains("expired") {
-            Some("certificate expired".to_string())
-        } else if lower.contains("hostname") || lower.contains("subject alt") {
-            Some("hostname doesn't match certificate".to_string())
-        } else if lower.contains("unknown ca") || lower.contains("local issuer") || lower.contains("untrusted") {
-            Some("certificate not trusted by system root store".to_string())
-        } else {
-            Some("certificate verification failed".to_string())
-        }
-    } else {
-        None
-    }
+/// Why a probe instead of inspecting the error: reqwest erases the TLS
+/// backend's typed error behind `Box<dyn Error>`, and the textual phrasing
+/// drifts between native-tls (different again on Linux/macOS/Windows),
+/// rustls, and reqwest versions. A live retry sidesteps all of that.
+///
+/// Sends HEAD so the user's request body isn't replayed against a server
+/// we just failed to verify. Any HTTP response — even 4xx/5xx — means the
+/// TLS handshake completed, which is the only signal we need.
+pub async fn is_ssl_failure(pool: &SqlitePool, url: &str) -> bool {
+    let Ok(client) = build_probe_http_client(pool).await else {
+        return false;
+    };
+    client.head(url).send().await.is_ok()
 }

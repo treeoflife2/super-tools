@@ -481,6 +481,12 @@
   }
   .dv-edit-editor {
     display: flex;
+    /* `align-items: flex-start` disables the flex default `stretch`, which
+       would otherwise pin the gutter to the parent's cross-axis (max-height
+       300px ≈ 15 lines) while the textarea grows to its explicit content
+       height. Without this, gutter line numbers visibly stop ~line 15
+       while the textarea content keeps going. */
+    align-items: flex-start;
     max-height: 300px;
     overflow-y: auto;
     border-radius: 5px;
@@ -727,6 +733,9 @@
     top: 0; left: 0; right: 0; bottom: 0;
     background: rgba(0,0,0,0.45);
     backdrop-filter: blur(8px);
+    /* Modal is teleported to <body> via use:teleportToBody so it sits
+       outside the app's stacking contexts — z-index just needs to clear
+       any other body-level layer (toasts, contextmenus, etc.). */
     z-index: 1000;
     display: flex;
     align-items: center;
@@ -872,37 +881,42 @@
   }
   .dv-insert-editor-container {
     position: relative;
-    min-height: 320px;
-    max-height: 50vh;
-    overflow-y: auto;
+    /* Fixed-height clip box. The textarea inside is the actual scroll
+       owner so the browser keeps the caret in view as the user types
+       past the visible area; the gutter and highlight overlay are
+       pinned to the box and shifted via JS to mirror the textarea's
+       scrollTop. Without a fixed clip box, the overlay would extend
+       below the modal and the cursor-tracking semantics break. */
+    height: 50vh;
+    overflow: hidden;
     border: 1px solid var(--b1);
     border-radius: 8px;
   }
   .dv-insert-editor {
     position: relative;
     z-index: 1;
-    min-height: 320px;
+    height: 100%;
     border: none;
     border-radius: 0;
+    /* Override the `align-items: flex-start` from `.dv-edit-editor` —
+       in this layout the gutter and textarea must each fill the full
+       container height so their scroll regions line up. */
+    align-items: stretch;
+    max-height: none;
+    overflow: visible;
+  }
+  .dv-insert-editor .dv-edit-gutter {
+    /* Programmatic scroll only (synced from the textarea). Hidden
+       overflow lets us set scrollTop without a visible scrollbar. */
+    overflow: hidden;
   }
   .dv-insert-editor .dv-edit-ta {
-    min-height: 300px;
-    color: transparent;
-    caret-color: var(--t1);
-  }
-  .dv-insert-highlight {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    padding: 8px 12px 8px 48px;
-    font-family: var(--mono);
-    font-size: 12px;
-    line-height: 1.5;
-    white-space: pre-wrap;
-    word-break: break-word;
-    pointer-events: none;
-    z-index: 0;
+    /* Textarea owns the scroll — browser handles caret + selection. */
+    height: 100%;
+    overflow: auto;
+    min-height: 0;
+    /* Disable macOS rubber-band — this is a desktop app, not a webpage. */
+    overscroll-behavior: none;
   }
   .dv-insert-footer {
     display: flex;

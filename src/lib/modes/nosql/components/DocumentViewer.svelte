@@ -85,6 +85,20 @@
   let insertError = $state('');
   let insertErrorLine = $state(-1);
   let insertDocCount = $derived(insertValid ? countInsertDocs(insertDoc) : 0);
+
+  // The Insert modal used to layer a syntax-highlighted overlay behind a
+  // transparent textarea. That pattern is fragile: any sub-pixel padding
+  // or font-metric mismatch between the two layers misaligns the visible
+  // text from the real caret/selection, and macOS WKWebView's bounce
+  // scroll exposes the desync further. We render JSON plainly in the
+  // textarea now — no overlay, no alignment risk. The gutter still
+  // scroll-syncs so line numbers track the textarea.
+  let insertTaEl = $state<HTMLTextAreaElement | null>(null);
+  let insertGutterEl = $state<HTMLDivElement | null>(null);
+  function syncInsertScroll() {
+    if (!insertTaEl) return;
+    if (insertGutterEl) insertGutterEl.scrollTop = insertTaEl.scrollTop;
+  }
   let showUpdateModal = $state(false);
   let updateFilter = $state('');
   let updateDoc = $state('');
@@ -99,6 +113,20 @@
   let deleteFilterValid = $state(true);
   let deleteFilterError = $state('');
   let deleteFilterErrorLine = $state(-1);
+
+  /** Move the modal overlay to <body> so DOM mutations inside the modal
+   *  (textarea input, scroll-sync, validation re-renders) can't trigger
+   *  repaints in the ancestor layout — that propagation was producing
+   *  the 1Hz blink in the topbar/sidebar that tracked the sidebar's
+   *  fullscreen poll. Same pattern as CoworkerModal.svelte. */
+  function teleportToBody(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        if (node.parentElement === document.body) node.remove();
+      },
+    };
+  }
 
   // Track previous collection to detect actual changes
   let prevKey = $state('');
@@ -301,16 +329,43 @@
     }
   }
 
+  // macOS WKWebView honours system-level "Smart Quotes" substitution even
+  // when the textarea has autocorrect="off" — System Settings ▸ Keyboard ▸
+  // Text Input ▸ Edit ▸ Substitutions can silently swap " for “/” and ' for
+  // ‘/’, which JSON.parse then rejects with "Unterminated string". Scrub
+  // them on input. UTF-16 length is 1:1 so cursor position is preserved.
+  function stripSmartQuotes(s: string): string {
+    return s.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+  }
+
   function handleInsertInput(e: Event) {
-    insertDoc = (e.target as HTMLTextAreaElement).value;
+    const ta = e.target as HTMLTextAreaElement;
+    const cleaned = stripSmartQuotes(ta.value);
+    if (cleaned !== ta.value) {
+      const start = ta.selectionStart, end = ta.selectionEnd;
+      ta.value = cleaned;
+      ta.setSelectionRange(start, end);
+    }
+    insertDoc = cleaned;
     const r = validateJson(insertDoc);
     insertValid = r.valid;
     insertError = r.error;
     insertErrorLine = r.errorLine;
   }
 
+  function scrubAndAssign(e: Event, assign: (v: string) => void) {
+    const ta = e.target as HTMLTextAreaElement;
+    const cleaned = stripSmartQuotes(ta.value);
+    if (cleaned !== ta.value) {
+      const start = ta.selectionStart, end = ta.selectionEnd;
+      ta.value = cleaned;
+      ta.setSelectionRange(start, end);
+    }
+    assign(cleaned);
+  }
+
   function handleUpdateFilterInput(e: Event) {
-    updateFilter = (e.target as HTMLTextAreaElement).value;
+    scrubAndAssign(e, v => { updateFilter = v; });
     const r = validateJson(updateFilter);
     updateFilterValid = r.valid;
     updateFilterError = r.error;
@@ -318,7 +373,7 @@
   }
 
   function handleUpdateDocInput(e: Event) {
-    updateDoc = (e.target as HTMLTextAreaElement).value;
+    scrubAndAssign(e, v => { updateDoc = v; });
     const r = validateJson(updateDoc);
     updateDocValid = r.valid;
     updateDocError = r.error;
@@ -326,7 +381,7 @@
   }
 
   function handleDeleteFilterInput(e: Event) {
-    deleteFilter = (e.target as HTMLTextAreaElement).value;
+    scrubAndAssign(e, v => { deleteFilter = v; });
     const r = validateJson(deleteFilter);
     deleteFilterValid = r.valid;
     deleteFilterError = r.error;
@@ -334,7 +389,7 @@
   }
 
   function handleEditInput(e: Event) {
-    editingValue = (e.target as HTMLTextAreaElement).value;
+    scrubAndAssign(e, v => { editingValue = v; });
     validateEditJson();
   }
 
@@ -775,7 +830,7 @@
                   {#if !editJsonValid}
                     <div class="dv-edit-error">
                       <svg viewBox="0 0 24 24" width="12" height="12"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                      {editErrorMsg}
+                      {#if editErrorLine > 0}<strong>Line {editErrorLine}:</strong>&nbsp;{/if}{editErrorMsg}
                     </div>
                   {/if}
                   <div class="dv-doc-edit-actions">
@@ -802,7 +857,7 @@
     {#if showInsert}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="dv-modal-overlay" onclick={(e) => { if (e.target === e.currentTarget) showInsert = false; }}>
+      <div class="dv-modal-overlay" use:teleportToBody onclick={(e) => { if (e.target === e.currentTarget) showInsert = false; }}>
         <div class="dv-modal dv-insert-modal">
           <div class="dv-insert-header">
             <div>
@@ -825,29 +880,27 @@
           <div class="dv-insert-editor-area">
             <div class="dv-insert-editor-container">
               <div class="dv-edit-editor dv-insert-editor">
-                <div class="dv-edit-gutter">
+                <div class="dv-edit-gutter" bind:this={insertGutterEl}>
                   {#each insertDoc.split('\n') as _, ln}
                     <span class="dv-edit-ln" class:dv-ln-err={insertErrorLine === ln + 1}>{ln + 1}</span>
                   {/each}
                 </div>
                 <textarea
                   class="dv-edit-ta"
-                  style="min-height:300px"
+                  bind:this={insertTaEl}
                   value={insertDoc}
                   oninput={handleInsertInput}
                   onkeydown={handleInsertKeydown}
+                  onscroll={syncInsertScroll}
                   spellcheck="false"
                   placeholder="Paste one or more documents here"
                 ></textarea>
-              </div>
-              <div class="dv-insert-highlight" aria-hidden="true">
-                {@html highlightJSON(insertDoc)}
               </div>
             </div>
             {#if !insertValid}
               <div class="dv-edit-error">
                 <svg viewBox="0 0 24 24" width="12" height="12"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                {insertError}
+                {#if insertErrorLine > 0}<strong>Line {insertErrorLine}:</strong>&nbsp;{/if}{insertError}
               </div>
             {/if}
           </div>
@@ -868,7 +921,7 @@
     {#if showUpdateModal}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="dv-modal-overlay" onclick={(e) => { if (e.target === e.currentTarget) showUpdateModal = false; }}>
+      <div class="dv-modal-overlay" use:teleportToBody onclick={(e) => { if (e.target === e.currentTarget) showUpdateModal = false; }}>
         <div class="dv-modal dv-modal-lg">
           <div class="dv-modal-hdr">
             <span>Update Document</span>
@@ -920,7 +973,7 @@
     {#if showDeleteModal}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="dv-modal-overlay" onclick={(e) => { if (e.target === e.currentTarget) showDeleteModal = false; }}>
+      <div class="dv-modal-overlay" use:teleportToBody onclick={(e) => { if (e.target === e.currentTarget) showDeleteModal = false; }}>
         <div class="dv-modal dv-modal-lg">
           <div class="dv-modal-hdr">
             <span>Delete Document</span>

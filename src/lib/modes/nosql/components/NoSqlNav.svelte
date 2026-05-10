@@ -45,6 +45,18 @@
 
   let { searchQuery = '' }: Props = $props();
 
+  function connectionDetail(conn: NoSqlConnection): string {
+    if (conn.host) {
+      return `${conn.username}${conn.username ? '@' : ''}${conn.host}${conn.port ? `:${conn.port}` : ''}`;
+    }
+    if (conn.connectionString) {
+      const m = conn.connectionString.match(/^[a-z+]+:\/\/(?:[^@]+@)?([^/?#]+)/i);
+      if (m) return m[1];
+      return conn.connectionString;
+    }
+    return '—';
+  }
+
   let expandedConns = $state<Set<string>>(new Set());
   let expandedDbs = $state<Set<string>>(new Set());
   let collapsedDuringSearch = $state<Set<string>>(new Set());
@@ -442,52 +454,55 @@
       {@const errorMsg = $nosqlConnectionErrors.get(conn.id) ?? ''}
       {@const isExpanded = expandedConns.has(conn.id) && isConnected}
 
-      <button
-        class="tree-item tree-conn"
-        class:active={$activeNoSqlConnectionId === conn.id}
-        class:connected={isConnected}
-        class:connecting={isConnecting}
-        class:errored={hasError}
-        title={hasError ? errorMsg : ''}
-        onclick={() => handleClickConnection(conn)}
-        oncontextmenu={(e) => showConnMenu(e, conn)}
-      >
-        <svg class="tree-chevron" class:open={(isExpanded || searchQuery) && !collapsedDuringSearch.has(`conn:${conn.id}`)} viewBox="0 0 24 24">
-          <path d="M9 18l6-6-6-6"/>
-        </svg>
-        <span
-          class="conn-badge-wrap"
+      <div class="ncoll">
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="ncoll-hdr"
+          class:active={$activeNoSqlConnectionId === conn.id}
           class:connected={isConnected}
           class:connecting={isConnecting}
           class:errored={hasError}
+          title={hasError ? errorMsg : ''}
+          onclick={() => handleClickConnection(conn)}
+          oncontextmenu={(e) => showConnMenu(e, conn)}
         >
-          <span class="conn-driver" style:color={driverColor(conn.driver)} style:background="color-mix(in srgb, {driverColor(conn.driver)} 12%, transparent)">
-            {conn.driver === 'mongodb' ? 'MG' : 'RD'}
-          </span>
-        </span>
-        <div class="tree-body">
-          <div class="tree-row-top">
-            <span class="tree-label">{conn.name}</span>
+          <div class="coll-icon" style:color={driverColor(conn.driver)} style:background="color-mix(in srgb, {driverColor(conn.driver)} 18%, transparent)">
+            <span class="conn-driver-text">{conn.driver === 'mongodb' ? 'MG' : 'RD'}</span>
+            {#if isConnected}<span class="conn-dot" aria-label="Connected" title="Connected"></span>{/if}
           </div>
-          <div class="tree-row-bot">
-            {#if isConnecting}
-              <span class="nn-connecting-text">Connecting<span class="nn-dots"></span></span>
-            {:else}
-              <span class="tree-sub">{conn.host}{conn.port ? `:${conn.port}` : ''}</span>
-            {/if}
+          <div class="ncoll-text">
+            <div class="ncoll-row-top">
+              <span class="ncoll-name">{conn.name}</span>
+            </div>
+            <div class="ncoll-row-bot">
+              {#if isConnecting}
+                <span class="ncoll-sub">Connecting<span class="nn-dots"></span></span>
+              {:else}
+                <span class="ncoll-sub">{connectionDetail(conn)}</span>
+              {/if}
+            </div>
           </div>
+          {#if isConnected}
+            <button
+              class="coll-menu"
+              title="Refresh"
+              onclick={async (e) => { e.stopPropagation(); dbCache = new Map([...dbCache].filter(([k]) => k !== conn.id)); collCache = new Map([...collCache].filter(([k]) => !k.startsWith(`${conn.id}:`))); await loadDatabases(conn.id); const dbs = dbCache.get(conn.id) ?? []; for (const db of dbs) { const key = `${conn.id}:${db}`; if (expandedDbs.has(key)) loadCollections(conn.id, db); } }}
+            >
+              {@html icons.refresh}
+            </button>
+          {/if}
+          <button
+            class="coll-menu"
+            title="More"
+            onclick={(e) => { e.stopPropagation(); showConnMenu(e, conn); }}
+          >
+            {@html icons.ellipsisV}
+          </button>
+          <svg class="ncoll-arr" class:open={(isExpanded || searchQuery) && !collapsedDuringSearch.has(`conn:${conn.id}`)} viewBox="0 0 24 24">
+            <path d="M9 18l6-6-6-6" stroke="currentColor" fill="none" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
         </div>
-        {#if isConnected}
-          <span class="conn-action" role="button" tabindex="-1" title="Refresh"
-            onclick={async (e) => { e.stopPropagation(); dbCache = new Map([...dbCache].filter(([k]) => k !== conn.id)); collCache = new Map([...collCache].filter(([k]) => !k.startsWith(`${conn.id}:`))); await loadDatabases(conn.id); const dbs = dbCache.get(conn.id) ?? []; for (const db of dbs) { const key = `${conn.id}:${db}`; if (expandedDbs.has(key)) loadCollections(conn.id, db); } }}>
-            {@html icons.refresh}
-          </span>
-        {/if}
-        <span class="conn-action conn-ellipsis" role="button" tabindex="-1" title="More"
-          onclick={(e) => { e.stopPropagation(); showConnMenu(e, conn); }}>
-          {@html icons.ellipsisV}
-        </span>
-      </button>
 
       <!-- Tree: databases → collections -->
       {#if ((isExpanded || searchQuery) && !collapsedDuringSearch.has(`conn:${conn.id}`)) && conn.driver === 'mongodb' && isConnected}
@@ -559,6 +574,7 @@
           {/each}
         {/if}
       {/if}
+      </div>
     {/each}
   {/if}
 </div>
@@ -653,95 +669,119 @@
     flex: 1;
   }
 
-  /* Two-line connection row to match SSH/Explorer parity. */
-  .tree-conn {
+  .ncoll {
+    border-bottom: 1px solid var(--b1);
+  }
+  .ncoll-hdr {
     min-height: 44px;
-    height: auto;
     padding: 6px 8px;
-    gap: 8px;
+    display: flex;
     align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    transition: background 0.1s;
+    user-select: none;
   }
-  .tree-conn.active { background: color-mix(in srgb, var(--acc) 10%, transparent); }
-  .tree-conn.connecting { pointer-events: none; }
-  .tree-conn.errored { background: color-mix(in srgb, var(--err) 8%, transparent); }
-  /* Connection status indicator — rectangular outline around the driver
-     badge + 6px pulsing corner dot. Same visual language as SSH/Explorer
-     (ring + dot, dialled-down 3s pulse) just shaped to fit the rectangular
-     badge instead of a square icon container. Idle = both invisible. */
-  .conn-badge-wrap {
-    position: relative;
-    display: inline-flex;
-    flex-shrink: 0;
-  }
-  .conn-badge-wrap.connected::before,
-  .conn-badge-wrap.connecting::before,
-  .conn-badge-wrap.errored::before {
-    content: '';
-    position: absolute;
-    inset: -3px;
-    border-radius: 5px;
-    pointer-events: none;
-  }
-  .conn-badge-wrap.connected::before { border: 1px solid color-mix(in srgb, var(--ok, #1dc880) 28%, transparent); }
-  .conn-badge-wrap.connecting::before { border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); }
-  .conn-badge-wrap.errored::before { border: 1px solid color-mix(in srgb, var(--err) 35%, transparent); }
-
-  .conn-badge-wrap.connected::after,
-  .conn-badge-wrap.connecting::after,
-  .conn-badge-wrap.errored::after {
-    content: '';
-    position: absolute;
-    top: -4px;
-    right: -4px;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    box-shadow: 0 0 0 1.5px var(--n);
-    pointer-events: none;
-  }
-  .conn-badge-wrap.connected::after  { background: var(--ok, #1dc880); animation: nnBadgePulseOk 3s ease-in-out infinite; }
-  .conn-badge-wrap.connecting::after { background: var(--warn);        animation: nnBadgePulseWarn 1.4s ease-in-out infinite; }
-  .conn-badge-wrap.errored::after    { background: var(--err); }
-
-  @keyframes nnBadgePulseOk {
-    0%, 100% { box-shadow: 0 0 0 1.5px var(--n), 0 0 0 2px color-mix(in srgb, var(--ok, #1dc880) 30%, transparent); }
-    50%      { box-shadow: 0 0 0 1.5px var(--n), 0 0 0 5px color-mix(in srgb, var(--ok, #1dc880) 0%, transparent); }
-  }
-  @keyframes nnBadgePulseWarn {
-    0%, 100% { box-shadow: 0 0 0 1.5px var(--n), 0 0 0 2px color-mix(in srgb, var(--warn) 35%, transparent); }
-    50%      { box-shadow: 0 0 0 1.5px var(--n), 0 0 0 5px color-mix(in srgb, var(--warn) 0%, transparent); }
-  }
-  .tree-conn .tree-label { font-size: 12.5px; color: var(--t2); font-weight: 500; }
-  .tree-conn.active .tree-label { color: var(--t1); }
-  .tree-body {
+  .ncoll-hdr:hover { background: var(--n2); }
+  .ncoll-hdr.active { background: var(--n2); }
+  .ncoll-hdr.connecting { pointer-events: none; }
+  .ncoll-hdr.errored { background: color-mix(in srgb, var(--err) 8%, transparent); }
+  .ncoll-text {
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 1px;
   }
-  .tree-row-top, .tree-row-bot {
+  .ncoll-row-top, .ncoll-row-bot {
     display: flex;
     align-items: center;
-    gap: 6px;
     min-width: 0;
+    gap: 5px;
   }
-  .tree-sub {
+  .ncoll-name {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--t2);
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ncoll-hdr.active .ncoll-name { color: var(--t1); }
+  .ncoll-sub {
     font-size: 10.5px;
     font-family: var(--mono);
-    color: var(--t3);
+    color: var(--t4);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    min-width: 0;
+    flex: 1;
   }
-  .tree-conn.active .tree-sub { color: var(--t2); }
+  .ncoll-arr {
+    width: 12px;
+    height: 12px;
+    stroke: var(--t3);
+    fill: none;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    flex-shrink: 0;
+    transition: transform 0.18s;
+  }
+  .ncoll-arr.open { transform: rotate(90deg); }
 
-  .tree-chevron {
-    width: 10px; height: 10px;
-    stroke: var(--t4); fill: none; stroke-width: 2; stroke-linecap: round;
-    flex-shrink: 0; transition: transform 0.15s;
+  .coll-icon {
+    position: relative;
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
   }
-  .tree-chevron.open { transform: rotate(90deg); }
+  .conn-driver-text {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    font-family: var(--ui);
+  }
+  .conn-dot {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--ok, #1dc880);
+    box-shadow: 0 0 0 1.5px var(--n);
+    animation: connDotPulse 3s ease-in-out infinite;
+  }
+  @keyframes connDotPulse {
+    0%, 100% { box-shadow: 0 0 0 1.5px var(--n), 0 0 0 2px color-mix(in srgb, var(--ok, #1dc880) 30%, transparent); }
+    50%      { box-shadow: 0 0 0 1.5px var(--n), 0 0 0 5px color-mix(in srgb, var(--ok, #1dc880) 0%, transparent); }
+  }
+
+  .coll-menu {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    border: none;
+    background: transparent;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    color: var(--t3);
+    transition: background 0.1s, color 0.1s;
+    padding: 0;
+  }
+  .ncoll-hdr:hover .coll-menu { display: flex; }
+  .coll-menu:hover { background: var(--b1); color: var(--t1); }
+  .coll-menu :global(svg) { width: 13px; height: 13px; }
 
   .tree-chevron-sm {
     width: 8px; height: 8px;
@@ -750,25 +790,6 @@
   }
   .tree-chevron-sm.open { transform: rotate(90deg); }
 
-
-  .conn-driver {
-    font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px;
-    font-family: var(--ui); flex-shrink: 0; letter-spacing: 0.04em;
-  }
-
-  /* Action icons on connection row */
-  .conn-action {
-    width: 20px; height: 20px;
-    display: none; align-items: center; justify-content: center;
-    border-radius: 4px; flex-shrink: 0; cursor: default;
-    color: var(--t3); transition: background 0.1s, color 0.1s;
-  }
-  .tree-conn:hover .conn-action { display: flex; }
-  .conn-action:hover { background: rgba(255,255,255,0.08); color: var(--t1); }
-  .conn-ellipsis { display: none; }
-  .tree-conn:hover .conn-ellipsis { display: flex; }
-
-  .nn-connecting-text { font-size: 10px; color: var(--t3); font-family: var(--ui); flex-shrink: 0; margin-left: 4px; }
   .nn-dots::after { content: ''; animation: nn-dots 1.4s steps(4, end) infinite; }
   @keyframes nn-dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
 

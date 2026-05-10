@@ -105,6 +105,56 @@ impl S3Backend {
             },
         }
     }
+
+    /// Sum the size of every object under `key_prefix` (which must end in
+    /// `/`). Walks the S3 listing without a delimiter, so a folder with N
+    /// keys costs ceil(N/1000) requests. Capped at PREFIX_SIZE_PAGE_LIMIT
+    /// pages to avoid pathological folder scans dominating the listing.
+    async fn prefix_size_bytes(&self, key_prefix: &str) -> Result<u64, FsError> {
+        const PREFIX_SIZE_PAGE_LIMIT: u32 = 25;
+        let mut total: u64 = 0;
+        let mut continuation_token: Option<String> = None;
+        let mut pages = 0u32;
+        loop {
+            let mut action = ListObjectsV2::new(&self.bucket, Some(&self.creds));
+            action.with_prefix(key_prefix.to_string());
+            if let Some(c) = &continuation_token {
+                action.with_continuation_token(c.clone());
+            }
+            let signed = action.sign(SIGNED_URL_TTL);
+            let resp = self
+                .http
+                .get(signed)
+                .send()
+                .await
+                .map_err(|e| FsError::NetworkError {
+                    detail: e.to_string(),
+                })?;
+            if !resp.status().is_success() {
+                return Err(FsError::Other {
+                    detail: format!("prefix-size list HTTP {}", resp.status()),
+                });
+            }
+            let body = resp.text().await.unwrap_or_default();
+            let parsed = ListObjectsV2::parse_response(body.as_bytes()).map_err(|e| {
+                FsError::Other {
+                    detail: format!("parse list: {}", e),
+                }
+            })?;
+            for obj in &parsed.contents {
+                total = total.saturating_add(obj.size);
+            }
+            pages += 1;
+            if pages >= PREFIX_SIZE_PAGE_LIMIT {
+                break;
+            }
+            match parsed.next_continuation_token {
+                Some(tok) => continuation_token = Some(tok),
+                None => break,
+            }
+        }
+        Ok(total)
+    }
 }
 
 #[async_trait]
@@ -145,9 +195,14 @@ impl RemoteFs for S3Backend {
         })?;
 
         let mut entries = Vec::new();
+        let mut dir_prefixes: Vec<(usize, String)> = Vec::new();
         for cp in &parsed.common_prefixes {
             let cleaned = cp.prefix.trim_end_matches('/');
             let name = cleaned.rsplit('/').next().unwrap_or(cleaned).to_string();
+            // Use the slash-terminated form so the size scan only matches
+            // contents under this folder (otherwise sibling folders sharing
+            // a name prefix would leak into the count).
+            dir_prefixes.push((entries.len(), format!("{}/", cleaned)));
             entries.push(DirEntry {
                 name: name.clone(),
                 path: format!("/{}/{}", self.bucket_name, cleaned),
@@ -173,6 +228,24 @@ impl RemoteFs for S3Backend {
                 permissions: None,
                 symlink_target: None,
             });
+        }
+
+        // Compute aggregate folder sizes for each subfolder via a delimiter-
+        // less ListObjectsV2 per prefix, capped at PREFIX_SIZE_PAGE_LIMIT
+        // pages so a pathological folder doesn't stall the listing. Run them
+        // concurrently with a small fan-out so a directory with many
+        // subfolders doesn't serialize the round-trips.
+        let size_futures = dir_prefixes
+            .into_iter()
+            .map(|(idx, p)| async move { (idx, self.prefix_size_bytes(&p).await) });
+        let size_results: Vec<(usize, Result<u64, FsError>)> = stream::iter(size_futures)
+            .buffer_unordered(8)
+            .collect()
+            .await;
+        for (idx, result) in size_results {
+            if let Ok(total) = result {
+                entries[idx].size = Some(total);
+            }
         }
         Ok(entries)
     }

@@ -525,7 +525,7 @@
                 </span>
                 {e.name}
               </td>
-              <td class="fb-col-size">{e.kind === 'dir' ? '—' : formatSize(e.size)}</td>
+              <td class="fb-col-size">{formatSize(e.size)}</td>
               <td class="fb-col-mod">{e.modified ?? '—'}</td>
               <td class="fb-col-perm">{e.permissions ?? '—'}</td>
             </tr>

@@ -91,6 +91,7 @@ export const agentUninstallPlugin = (name: string, marketplace: string) => invok
 // Usage
 export const agentGetUsageAnalytics = (days?: number) => invoke<UsageAnalytics>('agent_get_usage_analytics', { days });
 export const agentFetchUsageLimits = (sessionKey: string) => invoke<any>('agent_fetch_usage_limits', { sessionKey });
+export const agentFetchCodexUsageLimits = (accessToken: string) => invoke<any>('agent_fetch_codex_usage_limits', { accessToken });
 export const agentDiscoverSessions = (projectPath: string) => invoke<DiscoveredSession[]>('agent_discover_sessions', { projectPath });
 export const agentGetSessionTokens = (projectPath: string, sessionId?: string) => invoke<TokenUsage>('agent_get_session_tokens', { projectPath, sessionId });
 export const agentGetSessionContextUsage = (projectPath: string, sessionId: string) => invoke<ContextUsage>('agent_get_session_context_usage', { projectPath, sessionId });

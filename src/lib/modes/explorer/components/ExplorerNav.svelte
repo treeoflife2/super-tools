@@ -339,43 +339,44 @@
     {:else}
       {#each filtered as conn (conn.id)}
         {@const connected = connectedIds.has(conn.id)}
-        <button
-          class="ex-row"
-          class:active={$activeExplorerConnection?.id === conn.id}
-          class:connected
-          onclick={() => handleConnect(conn)}
-          oncontextmenu={(e) => handleContextMenu(e, conn)}
-        >
-          <span class="ex-row-icon">
-            {@html kindIcon(conn.kind)}
-          </span>
-          <div class="ex-row-body">
-            <div class="ex-row-top">
-              <span class="ex-row-name">{conn.name}</span>
-              <span
-                class="ex-row-badge"
-                style:color={kindColor(conn.kind)}
-                style:background="color-mix(in srgb, {kindColor(conn.kind)} 12%, transparent)"
-              >{kindBadge(conn.kind)}</span>
-            </div>
-            <div class="ex-row-bot">
-              <span class="ex-row-sub">{subLine(conn)}</span>
-              <span class="ex-row-spacer"></span>
-              <span class="ex-row-time">{relativeTime(conn.lastUsedAt)}</span>
-            </div>
-          </div>
+        <div class="ncoll">
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <span
-            class="ex-row-ellipsis"
-            role="button"
-            tabindex="-1"
-            title="More"
-            onclick={(e) => handleContextMenu(e as unknown as MouseEvent, conn)}
+          <div
+            class="ncoll-hdr"
+            class:active={$activeExplorerConnection?.id === conn.id}
+            class:connected
+            onclick={() => handleConnect(conn)}
+            oncontextmenu={(e) => handleContextMenu(e, conn)}
           >
-            <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
-          </span>
-        </button>
+            <div class="coll-icon coll-icon-accent">
+              {@html kindIcon(conn.kind)}
+              {#if connected}<span class="conn-dot" aria-label="Connected" title="Connected"></span>{/if}
+            </div>
+            <div class="ncoll-text">
+              <div class="ncoll-row-top">
+                <span class="ncoll-name">{conn.name}</span>
+                <span
+                  class="ncoll-badge"
+                  style:color={kindColor(conn.kind)}
+                  style:background="color-mix(in srgb, {kindColor(conn.kind)} 12%, transparent)"
+                >{kindBadge(conn.kind)}</span>
+              </div>
+              <div class="ncoll-row-bot">
+                <span class="ncoll-sub">{subLine(conn)}</span>
+                <span class="ncoll-spacer"></span>
+                <span class="ncoll-time">{relativeTime(conn.lastUsedAt)}</span>
+              </div>
+            </div>
+            <button
+              class="coll-menu"
+              title="More"
+              onclick={(e) => { e.stopPropagation(); handleContextMenu(e, conn); }}
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+            </button>
+          </div>
+        </div>
       {/each}
     {/if}
   </div>
@@ -474,7 +475,6 @@
   .ex-nav-list {
     flex: 1;
     overflow-y: auto;
-    padding: 6px 4px;
   }
   .ex-nav-list::-webkit-scrollbar { width: 4px; }
   .ex-nav-list::-webkit-scrollbar-thumb { background: var(--b1); border-radius: 2px; }
@@ -500,104 +500,63 @@
   }
   .ex-nav-empty-btn:hover { opacity: 0.88; }
 
-  /* Row — mirrors SSH `.profile-item` layout: icon + body + ellipsis */
-  .ex-row {
+  .ncoll {
+    border-bottom: 1px solid var(--b1);
+  }
+  .ncoll-hdr {
+    min-height: 44px;
+    padding: 6px 8px;
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 8px 10px;
-    border: none;
-    background: transparent;
-    border-radius: 6px;
-    cursor: default;
-    transition: background 0.08s;
-    width: 100%;
-    text-align: left;
-    color: var(--t3);
-    position: relative;
+    gap: 8px;
+    cursor: pointer;
+    transition: background 0.1s;
+    user-select: none;
   }
-  .ex-row:hover {
-    background: rgba(255, 255, 255, 0.04);
-    color: var(--t1);
-  }
-  .ex-row.active {
-    background: color-mix(in srgb, var(--acc) 14%, transparent);
-    color: var(--t1);
-  }
-  .ex-row.connected { color: var(--t1); }
-  .ex-row-icon {
-    position: relative;
-    width: 22px;
-    height: 22px;
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    /* Idle icon tint — matches SSH `.profile-icon`. SVG uses
-       currentColor, so this propagates. .connected state overrides below. */
-    color: var(--acc);
-  }
-  .ex-row-icon :global(svg) { width: 18px; height: 18px; }
-  /* Connected state — mirrors SSH `.profile-item.connected`:
-     border-only ring around the icon (no fill, gentle), small pulsing
-     status dot, icon stroke turns green. Same dialled-down intensity
-     as SSH (3s cadence, smaller dot, smaller pulse spread). */
-  .ex-row.connected .ex-row-icon { color: var(--ok, #1dc880); }
-  .ex-row.connected .ex-row-icon :global(svg) {
-    stroke: var(--ok, #1dc880);
-    position: relative;
-    z-index: 1;
-  }
-  .ex-row.connected .ex-row-icon::before {
-    content: '';
-    position: absolute;
-    inset: -2px;
-    border-radius: 8px;
-    border: 1px solid color-mix(in srgb, var(--ok, #1dc880) 28%, transparent);
-    z-index: 0;
-  }
-  .ex-row.connected .ex-row-icon::after {
-    content: '';
-    position: absolute;
-    top: 1px;
-    right: 1px;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--ok, #1dc880);
-    box-shadow: 0 0 0 1.5px var(--n);
-    z-index: 2;
-    animation: exRowConnPulse 3s ease-in-out infinite;
-  }
-  @keyframes exRowConnPulse {
-    0%, 100% { box-shadow: 0 0 0 1.5px var(--n), 0 0 0 2px color-mix(in srgb, var(--ok, #1dc880) 30%, transparent); }
-    50%      { box-shadow: 0 0 0 1.5px var(--n), 0 0 0 5px color-mix(in srgb, var(--ok, #1dc880) 0%, transparent); }
-  }
-  .ex-row-body {
+  .ncoll-hdr:hover { background: var(--n2); }
+  .ncoll-hdr.active { background: var(--n2); }
+  .ncoll-text {
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
   }
-  .ex-row-top {
+  .ncoll-row-top, .ncoll-row-bot {
     display: flex;
     align-items: center;
-    gap: 6px;
     min-width: 0;
+    gap: 5px;
   }
-  .ex-row-name {
+  .ncoll-name {
     font-size: 12.5px;
     font-weight: 500;
-    color: var(--t1);
+    color: var(--t2);
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ncoll-hdr.active .ncoll-name { color: var(--t1); }
+  .ncoll-sub {
+    font-size: 10.5px;
+    font-family: var(--mono);
+    color: var(--t4);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex: 1;
     min-width: 0;
   }
-  .ex-row-badge {
-    /* color + background set inline via kindColor(kind) — see template. */
+  .ncoll-spacer { flex: 1; }
+  .ncoll-time {
+    font-family: var(--ui);
+    font-size: 9px;
+    color: var(--t4);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .ncoll-badge {
     flex-shrink: 0;
     font-size: 9px;
     font-weight: 700;
@@ -606,48 +565,66 @@
     border-radius: 3px;
     font-family: var(--mono);
   }
-  .ex-row-bot {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-  }
-  .ex-row-sub {
-    font-size: 11px;
-    color: var(--t3);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: var(--mono);
-    flex-shrink: 1;
-    min-width: 0;
-  }
-  .ex-row-spacer { flex: 1; }
-  .ex-row-time {
-    flex-shrink: 0;
-    font-size: 10.5px;
-    color: var(--t4);
-    font-family: var(--mono);
-  }
-  .ex-row-ellipsis {
-    flex-shrink: 0;
+
+  .coll-icon {
+    position: relative;
     width: 22px;
     height: 22px;
+    border-radius: 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .coll-icon-accent {
+    background: color-mix(in srgb, var(--acc) 18%, transparent);
+    color: var(--acc);
+  }
+  .coll-icon :global(svg) {
+    width: 13px;
+    height: 13px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+  }
+  .ncoll-hdr.connected .coll-icon-accent {
+    background: color-mix(in srgb, var(--ok, #1dc880) 18%, transparent);
+    color: var(--ok, #1dc880);
+  }
+  .conn-dot {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--ok, #1dc880);
+    box-shadow: 0 0 0 1.5px var(--n);
+    animation: connDotPulse 3s ease-in-out infinite;
+  }
+  @keyframes connDotPulse {
+    0%, 100% { box-shadow: 0 0 0 1.5px var(--n), 0 0 0 2px color-mix(in srgb, var(--ok, #1dc880) 30%, transparent); }
+    50%      { box-shadow: 0 0 0 1.5px var(--n), 0 0 0 5px color-mix(in srgb, var(--ok, #1dc880) 0%, transparent); }
+  }
+
+  .coll-menu {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    border: none;
+    background: transparent;
     display: none;
     align-items: center;
     justify-content: center;
-    border-radius: 4px;
+    cursor: pointer;
+    flex-shrink: 0;
     color: var(--t3);
     transition: background 0.1s, color 0.1s;
-    cursor: default;
+    padding: 0;
   }
-  .ex-row:hover .ex-row-ellipsis,
-  .ex-row.active .ex-row-ellipsis { display: inline-flex; }
-  .ex-row-ellipsis:hover {
-    background: var(--b1);
-    color: var(--t1);
-  }
-  .ex-row-ellipsis :global(svg) { width: 14px; height: 14px; }
+  .ncoll-hdr:hover .coll-menu { display: flex; }
+  .coll-menu:hover { background: var(--b1); color: var(--t1); }
 
   /* Kind picker — visually matches the global Modal primitive
      (header bar with title + X, no click-outside close). */

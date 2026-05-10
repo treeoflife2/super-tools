@@ -116,6 +116,32 @@ impl AzureBlobBackend {
             FsError::Other { detail: s }
         }
     }
+
+    /// Sum the size of every blob under `key_prefix` (must end in `/`).
+    /// Walks the container listing without a delimiter; capped at
+    /// PREFIX_SIZE_PAGE_LIMIT pages so a giant virtual folder doesn't
+    /// stall the parent listing.
+    async fn prefix_size_bytes(&self, key_prefix: &str) -> Result<u64, FsError> {
+        const PREFIX_SIZE_PAGE_LIMIT: u32 = 25;
+        let mut total: u64 = 0;
+        let mut pages = 0u32;
+        let mut s = self
+            .container_client
+            .list_blobs()
+            .prefix(key_prefix.to_string())
+            .into_stream();
+        while let Some(page) = s.next().await {
+            let page = page.map_err(Self::map_err)?;
+            for blob in page.blobs.blobs() {
+                total = total.saturating_add(blob.properties.content_length);
+            }
+            pages += 1;
+            if pages >= PREFIX_SIZE_PAGE_LIMIT {
+                break;
+            }
+        }
+        Ok(total)
+    }
 }
 
 #[async_trait]
@@ -136,12 +162,14 @@ impl RemoteFs for AzureBlobBackend {
         }
         let mut stream = builder.into_stream();
         let mut entries: Vec<DirEntry> = Vec::new();
+        let mut dir_prefixes: Vec<(usize, String)> = Vec::new();
 
         while let Some(page) = stream.next().await {
             let page = page.map_err(Self::map_err)?;
             for prefix in page.blobs.prefixes() {
                 let cleaned = prefix.name.trim_end_matches('/');
                 let name = cleaned.rsplit('/').next().unwrap_or(cleaned).to_string();
+                dir_prefixes.push((entries.len(), format!("{}/", cleaned)));
                 entries.push(DirEntry {
                     name,
                     path: format!("/{}/{}", self.container_name, cleaned),
@@ -166,6 +194,21 @@ impl RemoteFs for AzureBlobBackend {
                     permissions: None,
                     symlink_target: None,
                 });
+            }
+        }
+
+        // Per-subfolder size aggregation (see s3.rs::prefix_size_bytes for
+        // the same pattern + cap rationale).
+        let size_futures = dir_prefixes
+            .into_iter()
+            .map(|(idx, p)| async move { (idx, self.prefix_size_bytes(&p).await) });
+        let size_results: Vec<(usize, Result<u64, FsError>)> = stream::iter(size_futures)
+            .buffer_unordered(8)
+            .collect()
+            .await;
+        for (idx, result) in size_results {
+            if let Ok(total) = result {
+                entries[idx].size = Some(total);
             }
         }
         Ok(entries)

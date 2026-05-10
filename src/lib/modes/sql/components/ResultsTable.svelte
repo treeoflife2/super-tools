@@ -501,6 +501,14 @@
           </tr>
         </thead>
         <tbody>
+          {#if result.rows.length === 0}
+            <tr class="rt-no-rows">
+              <td colspan={result.columns.length + 1}>
+                <div class="rt-no-rows-text">No rows returned</div>
+                <div class="rt-no-rows-meta">Query ran in {result.durationMs}ms</div>
+              </td>
+            </tr>
+          {/if}
           {#if spacerTop > 0}
             <tr style="height:{spacerTop}px" aria-hidden="true">
               <td colspan={result.columns.length + 1} style="padding:0;border:none"></td>
@@ -682,6 +690,23 @@
 
   .rt-affected { font-size: 14px; color: var(--acc); font-family: var(--mono); font-weight: 600; }
   .rt-duration { font-size: 11px; color: var(--t3); font-family: var(--mono); }
+  .rt-no-rows td {
+    padding: 36px 16px;
+    text-align: center;
+    border-bottom: 1px solid var(--b1);
+    background: transparent;
+  }
+  .rt-no-rows-text {
+    font-size: 12.5px;
+    color: var(--t3);
+    font-family: var(--mono);
+    margin-bottom: 4px;
+  }
+  .rt-no-rows-meta {
+    font-size: 11px;
+    color: var(--t4);
+    font-family: var(--mono);
+  }
 
   /* Scroll area */
   .rt-scroll { flex: 1; overflow: auto; }

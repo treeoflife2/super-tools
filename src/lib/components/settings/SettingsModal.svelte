@@ -56,6 +56,7 @@
         agentSaveContext,
         agentDeleteContext,
         agentFetchUsageLimits,
+        agentFetchCodexUsageLimits,
         agentGetUsageAnalytics,
     } from "$lib/modes/agent/commands";
     import type {
@@ -68,6 +69,8 @@
         agentUsageLimits,
         agentUsageAuthStatus,
         agentSessionKey as agentSessionKeyStore,
+        agentCodexToken as agentCodexTokenStore,
+        agentFooterProvider as agentFooterProviderStore,
         loadAgentUsageLimits,
     } from "$lib/modes/agent/stores";
     import {
@@ -123,6 +126,8 @@
             modal === "settings:ai" ||
             modal === "settings:agent" ||
             modal === "settings:agent:usage" ||
+            modal === "settings:agent:contexts" ||
+            modal === "settings:agent:plugins" ||
             modal === "settings:workspace"
         ) {
             show = true;
@@ -131,6 +136,14 @@
             if (modal === "settings:agent:usage") {
                 activeTab = "agent";
                 agentSubTab = "usage";
+            }
+            if (modal === "settings:agent:contexts") {
+                activeTab = "agent";
+                agentSubTab = "contexts";
+            }
+            if (modal === "settings:agent:plugins") {
+                activeTab = "agent";
+                agentSubTab = "plugins";
             }
             if (modal === "settings:workspace") activeTab = "workspace";
         } else {
@@ -145,6 +158,8 @@
                 $activeModal === "settings:ai" ||
                 $activeModal === "settings:agent" ||
                 $activeModal === "settings:agent:usage" ||
+                $activeModal === "settings:agent:contexts" ||
+                $activeModal === "settings:agent:plugins" ||
                 $activeModal === "settings:workspace")
         ) {
             activeModal.set(null);
@@ -481,7 +496,8 @@
 
     async function handleSettingChange(key: string, value: string) {
         await setSetting(key, value);
-        // If session key changed, update store and fetch limits immediately
+        // Sync the matching agent-mode store and refresh the footer
+        // chip whenever a usage-tracking setting changes.
         if (key === "agent_session_key") {
             agentSessionKeyStore.set(value);
             if (value) {
@@ -490,6 +506,24 @@
                 agentUsageLimits.set(null);
                 agentUsageAuthStatus.set({ state: "unconfigured", message: "" });
             }
+        } else if (key === "agent_codex_access_token") {
+            agentCodexTokenStore.set(value);
+            if (value) {
+                loadAgentUsageLimits();
+            } else {
+                agentUsageLimits.set(null);
+                agentUsageAuthStatus.set({ state: "unconfigured", message: "" });
+            }
+        } else if (key === "agent_footer_usage_provider") {
+            if (value === "claude" || value === "codex") {
+                agentFooterProviderStore.set(value);
+            }
+            // Provider switch — clear stale chip state and re-fetch using
+            // the new provider. The dispatcher in loadAgentUsageLimits
+            // handles the unconfigured case.
+            agentUsageLimits.set(null);
+            agentUsageAuthStatus.set({ state: "unconfigured", message: "" });
+            loadAgentUsageLimits();
         }
     }
 
@@ -662,6 +696,10 @@
     let agentKeyTestMessage = $state("");
     let codexTokenInput = $state("");
     let showCodexToken = $state(false);
+    let codexTokenTestStatus = $state<"idle" | "testing" | "success" | "error">(
+        "idle",
+    );
+    let codexTokenTestMessage = $state("");
 
     // Agent Usage Stats
     let agentUsageData = $state<UsageAnalytics | null>(null);
@@ -729,18 +767,49 @@
 
     async function handleSaveCodexToken() {
         const token = codexTokenInput.trim();
-        if (!token) {
-            showToast("Enter a Codex access token first", "error");
-            return;
+        if (!token) return;
+        codexTokenTestStatus = "testing";
+        codexTokenTestMessage = "";
+        try {
+            await agentFetchCodexUsageLimits(token);
+            codexTokenTestStatus = "success";
+            codexTokenTestMessage = "Codex token verified";
+            await handleSettingChange("agent_codex_access_token", token);
+            showToast("Codex token verified and saved", "success");
+        } catch (e: any) {
+            codexTokenTestStatus = "error";
+            codexTokenTestMessage =
+                typeof e === "string"
+                    ? e
+                    : e.message || "Invalid or expired Codex token";
+            showToast("Invalid Codex token — not saved", "error");
         }
-        await handleSettingChange("agent_codex_access_token", token);
-        showToast("Codex access token saved", "success");
     }
 
     async function handleRemoveCodexToken() {
         await handleSettingChange("agent_codex_access_token", "");
         codexTokenInput = "";
+        codexTokenTestStatus = "idle";
+        codexTokenTestMessage = "";
         showToast("Codex access token removed", "success");
+    }
+
+    /** Auto-commit on blur / Enter for the Claude session-key field —
+     *  fires only when the input has a non-empty value that differs from
+     *  the currently-saved key. Keeps the user out of "click Save after
+     *  every paste" purgatory. Verification + save happens inside
+     *  handleSaveAgentKey, which already updates the inline status. */
+    function commitAgentKeyIfChanged() {
+        const v = agentKeyInput.trim();
+        if (!v || v === agentSessionKey) return;
+        handleSaveAgentKey();
+    }
+
+    /** Same auto-commit pattern for the Codex access-token field. */
+    function commitCodexTokenIfChanged() {
+        const v = codexTokenInput.trim();
+        if (!v || v === agentCodexToken) return;
+        handleSaveCodexToken();
     }
 
     async function loadAgentUsage() {
@@ -2341,6 +2410,13 @@
                                                     : "password"}
                                                 placeholder="sk-ant-sid01-..."
                                                 bind:value={agentKeyInput}
+                                                onblur={commitAgentKeyIfChanged}
+                                                onkeydown={(e) => {
+                                                    if (e.key === "Enter") {
+                                                        e.preventDefault();
+                                                        commitAgentKeyIfChanged();
+                                                    }
+                                                }}
                                             />
                                             <button
                                                 class="ai-key-toggle"
@@ -2389,20 +2465,9 @@
                                             </button>
                                         </div>
                                         <div class="agent-session-key-actions">
-                                            <button
-                                                class="ai-action-btn primary"
-                                                onclick={() =>
-                                                    handleSaveAgentKey()}
-                                                disabled={!agentKeyInput.trim() ||
-                                                    agentKeyTestStatus ===
-                                                        "testing"}
-                                            >
-                                                {#if agentKeyTestStatus === "testing"}
-                                                    Verifying...
-                                                {:else}
-                                                    Verify
-                                                {/if}
-                                            </button>
+                                            {#if agentKeyTestStatus === "testing"}
+                                                <span class="ai-test-result">Verifying…</span>
+                                            {/if}
                                             {#if agentSessionKey}
                                                 <button
                                                     class="ai-action-btn danger"
@@ -2420,10 +2485,21 @@
                                             >Codex access token</span
                                         >
                                         <span class="stg-card-row-help">
-                                            Used to read Codex live rate-limit
-                                            usage from ChatGPT. This endpoint is
-                                            experimental.
+                                            Grab from <strong>chatgpt.com/codex/cloud/settings/analytics</strong>
+                                            → DevTools → Network → <code>wham/usage</code>
+                                            → <code>authorization</code> header (after <code>Bearer </code>).
                                         </span>
+                                        {#if codexTokenTestStatus === "success"}
+                                            <span class="ai-test-result success">
+                                                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                                                {codexTokenTestMessage}
+                                            </span>
+                                        {:else if codexTokenTestStatus === "error"}
+                                            <span class="ai-test-result error">
+                                                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                                                {codexTokenTestMessage}
+                                            </span>
+                                        {/if}
                                     </div>
                                     <div class="agent-session-key-control">
                                         <div class="ai-key-input-wrap">
@@ -2434,6 +2510,13 @@
                                                     : "password"}
                                                 placeholder="Bearer token..."
                                                 bind:value={codexTokenInput}
+                                                onblur={commitCodexTokenIfChanged}
+                                                onkeydown={(e) => {
+                                                    if (e.key === "Enter") {
+                                                        e.preventDefault();
+                                                        commitCodexTokenIfChanged();
+                                                    }
+                                                }}
                                             />
                                             <button
                                                 class="ai-key-toggle"
@@ -2482,12 +2565,9 @@
                                             </button>
                                         </div>
                                         <div class="agent-session-key-actions">
-                                            <button
-                                                class="ai-action-btn primary"
-                                                onclick={handleSaveCodexToken}
-                                                disabled={!codexTokenInput.trim()}
-                                                >Save</button
-                                            >
+                                            {#if codexTokenTestStatus === "testing"}
+                                                <span class="ai-test-result">Verifying…</span>
+                                            {/if}
                                             {#if agentCodexToken}
                                                 <button
                                                     class="ai-action-btn danger"

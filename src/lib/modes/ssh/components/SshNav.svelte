@@ -352,43 +352,44 @@
   {:else}
     {#each filteredProfiles as profile (profile.id)}
       {@const connected = Array.from($sshTerminalIds.keys()).some((k) => profileIdFromTabKey(k) === profile.id && $sshConnStates.get(k) === 'connected')}
-      <button
-        class="profile-item"
-        class:active={$activeSshProfile?.id === profile.id}
-        class:connected
-        onclick={() => handleSelect(profile)}
-        oncontextmenu={(e) => showProfileMenu(e, profile)}
-      >
-        <span class="profile-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-            <rect x="2" y="4" width="20" height="6" rx="1"/>
-            <rect x="2" y="14" width="20" height="6" rx="1"/>
-            <line x1="6" y1="7" x2="6.01" y2="7"/>
-            <line x1="6" y1="17" x2="6.01" y2="17"/>
-          </svg>
-          {#if connected}<span class="profile-status-dot" aria-label="Connected" title="Connected"></span>{/if}
-        </span>
-        <div class="profile-body">
-          <div class="profile-row-top">
-            <span class="profile-name">{profile.name}</span>
-          </div>
-          <div class="profile-row-bot">
-            <span class="profile-host">{profile.username}@{profile.host}{profile.port !== 22 ? `:${profile.port}` : ''}</span>
-            <span class="profile-time-spacer"></span>
-            <span class="profile-time">{relativeTime(profile.lastUsedAt)}</span>
-          </div>
-        </div>
+      <div class="ncoll">
         <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <span
-          class="profile-ellipsis"
-          role="button"
-          tabindex="-1"
-          title="More"
-          onclick={(e) => { e.stopPropagation(); showProfileMenu(e, profile); }}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="ncoll-hdr"
+          class:active={$activeSshProfile?.id === profile.id}
+          class:connected
+          onclick={() => handleSelect(profile)}
+          oncontextmenu={(e) => showProfileMenu(e, profile)}
         >
-          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
-        </span>
-      </button>
+          <div class="coll-icon coll-icon-accent">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round">
+              <rect x="2" y="4" width="20" height="6" rx="1"/>
+              <rect x="2" y="14" width="20" height="6" rx="1"/>
+              <line x1="6" y1="7" x2="6.01" y2="7"/>
+              <line x1="6" y1="17" x2="6.01" y2="17"/>
+            </svg>
+            {#if connected}<span class="conn-dot" aria-label="Connected" title="Connected"></span>{/if}
+          </div>
+          <div class="ncoll-text">
+            <div class="ncoll-row-top">
+              <span class="ncoll-name">{profile.name}</span>
+            </div>
+            <div class="ncoll-row-bot">
+              <span class="ncoll-sub">{profile.username}@{profile.host}{profile.port !== 22 ? `:${profile.port}` : ''}</span>
+              <span class="ncoll-spacer"></span>
+              <span class="ncoll-time">{relativeTime(profile.lastUsedAt)}</span>
+            </div>
+          </div>
+          <button
+            class="coll-menu"
+            title="More"
+            onclick={(e) => { e.stopPropagation(); showProfileMenu(e, profile); }}
+          >
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+          </button>
+        </div>
+      </div>
     {/each}
   {/if}
 </div>
@@ -449,117 +450,120 @@
     color: var(--ssh, var(--acc));
   }
 
-  .profile-item {
-    width: 100%;
-    min-height: 46px;
-    border: none;
-    background: transparent;
+  .ncoll {
+    border-bottom: 1px solid var(--b1);
+  }
+  .ncoll-hdr {
+    min-height: 44px;
+    padding: 6px 8px;
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 5px 8px;
     cursor: pointer;
-    transition: background 0.08s;
-    text-align: left;
-    position: relative;
+    transition: background 0.1s;
+    user-select: none;
   }
-  .profile-item:hover { background: var(--c); }
-  .profile-item.active {
-    background: color-mix(in srgb, var(--ssh, var(--acc)) 12%, transparent);
+  .ncoll-hdr:hover { background: var(--n2); }
+  .ncoll-hdr.active { background: var(--n2); }
+  .ncoll-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .ncoll-row-top, .ncoll-row-bot {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    gap: 5px;
+  }
+  .ncoll-name {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--t2);
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ncoll-hdr.active .ncoll-name { color: var(--t1); }
+  .ncoll-sub {
+    font-size: 10.5px;
+    font-family: var(--mono);
+    color: var(--t4);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .ncoll-spacer { flex: 1; }
+  .ncoll-time {
+    font-family: var(--ui);
+    font-size: 9px;
+    color: var(--t4);
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
-  .profile-icon {
+  .coll-icon {
     position: relative;
-    width: 28px;
-    height: 28px;
-    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
     display: flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
+  }
+  .coll-icon-accent {
+    background: color-mix(in srgb, var(--acc) 18%, transparent);
     color: var(--acc);
-    transition: color 0.15s, transform 0.15s;
   }
-  .profile-icon svg {
-    width: 16px;
-    height: 16px;
-    position: relative;
-    z-index: 1;
+  .coll-icon svg {
+    width: 13px;
+    height: 13px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.8;
+    stroke-linecap: round;
   }
-  /* Connected state — softer than the original. Border-only ring (no bg
-     fill), tighter pulse spread, slower cadence. Goal: peripherally
-     visible "this is live" without drawing attention away from the row
-     content. Reverted from the unified left-stripe attempt (didn't read
-     well alongside the icon). */
-  .profile-item.connected .profile-icon { color: var(--ok, #1dc880); }
-  .profile-item.connected .profile-icon::before {
-    content: '';
+  .ncoll-hdr.connected .coll-icon-accent {
+    background: color-mix(in srgb, var(--ok, #1dc880) 18%, transparent);
+    color: var(--ok, #1dc880);
+  }
+  .conn-dot {
     position: absolute;
-    inset: -2px;
-    border-radius: 8px;
-    border: 1px solid color-mix(in srgb, var(--ok, #1dc880) 28%, transparent);
-    z-index: 0;
-  }
-  .profile-status-dot {
-    position: absolute;
-    top: 1px;
-    right: 1px;
+    top: -2px;
+    right: -2px;
     width: 6px;
     height: 6px;
     border-radius: 50%;
     background: var(--ok, #1dc880);
     box-shadow: 0 0 0 1.5px var(--n);
-    z-index: 2;
-    animation: profileStatusPulse 3s ease-in-out infinite;
+    animation: connDotPulse 3s ease-in-out infinite;
   }
-  @keyframes profileStatusPulse {
+  @keyframes connDotPulse {
     0%, 100% { box-shadow: 0 0 0 1.5px var(--n), 0 0 0 2px color-mix(in srgb, var(--ok, #1dc880) 30%, transparent); }
     50%      { box-shadow: 0 0 0 1.5px var(--n), 0 0 0 5px color-mix(in srgb, var(--ok, #1dc880) 0%, transparent); }
   }
 
-  .profile-body {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .profile-row-top { display: flex; align-items: center; gap: 6px; }
-  .profile-name {
-    font-family: var(--ui);
-    font-size: 12px;
-    color: var(--t2);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    flex: 1;
-    min-width: 0;
-  }
-  .profile-item.active .profile-name { color: var(--t1); }
-  .profile-row-bot { display: flex; align-items: center; gap: 5px; }
-  .profile-host {
-    font-size: 10.5px;
+  .coll-menu {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    border: none;
+    background: transparent;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
     color: var(--t3);
-    font-family: var(--mono);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    transition: background 0.1s, color 0.1s;
+    padding: 0;
   }
-  .profile-time-spacer { flex: 1; }
-  .profile-time {
-    font-family: var(--ui);
-    font-size: 9px;
-    color: var(--t4);
-    white-space: nowrap;
-  }
-
-  .profile-ellipsis {
-    width: 18px; height: 18px;
-    display: none; align-items: center; justify-content: center;
-    border-radius: 3px; flex-shrink: 0; cursor: default;
-    color: var(--t3); transition: background 0.1s, color 0.1s;
-  }
-  .profile-ellipsis svg { width: 14px; height: 14px; }
-  .profile-item:hover .profile-ellipsis { display: flex; }
-  .profile-ellipsis:hover { background: rgba(255,255,255,0.08); color: var(--t1); }
-
+  .ncoll-hdr:hover .coll-menu { display: flex; }
+  .coll-menu:hover { background: var(--b1); color: var(--t1); }
 </style>

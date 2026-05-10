@@ -8,7 +8,8 @@
   import { showToast } from '$lib/shared/primitives/toast';
   import { friendlyError } from '$lib/utils/errors';
   import * as cmd from '$lib/commands';
-  import { activeDrag } from '$lib/stores/drag';
+  import { dndzone, type DndEvent } from 'svelte-dnd-action';
+  import { isDraggingRest } from '$lib/stores/drag';
   import RequestItem from './RequestItem.svelte';
   import InlineInput from './InlineInput.svelte';
   import ConfirmDialog from '$lib/shared/primitives/ConfirmDialog.svelte';
@@ -27,9 +28,16 @@
   let addingRequest = $state(false);
   let renaming = $state(false);
   let showDeleteConfirm = $state(false);
-  let dragOverReqIndex = $state<number | null>(null);
-  let isDragTargeted = $state(false);
-  let hoverExpandTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Auto-expand whenever any request is being dragged anywhere — the
+  // collapsed body (max-height: 0) can't receive drops, so a collapsed
+  // collection would be invisible to the dndzone otherwise.
+  $effect(() => {
+    if ($isDraggingRest && !expanded) {
+      expanded = true;
+      if (!loaded) loadRequests();
+    }
+  });
 
   const isActive = $derived($activeCollectionId === collection.id);
 
@@ -193,118 +201,43 @@
     await loadRequests();
   }
 
-  // Drag & drop for the collection header — accept request drags, auto-expand on hover
-  function handleHeaderDragOver(e: DragEvent) {
-    const types = e.dataTransfer?.types ?? [];
-    if (!types.includes('text/request-id')) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-    isDragTargeted = true;
-    if (!expanded && !hoverExpandTimer) {
-      hoverExpandTimer = setTimeout(() => {
-        expanded = true;
-        if (!loaded) loadRequests();
-        hoverExpandTimer = null;
-      }, 500);
-    }
+  // Drag & drop via svelte-dnd-action — the same library Workspace uses
+  // for the Kanban board. Pointer-event-based, so it sidesteps the Tauri
+  // macOS issue where the native window swallows HTML5 drag events.
+  //
+  // `consider` fires throughout the drag for any zone whose items would
+  // change — we update local state optimistically so the ghost row sits
+  // where the user expects. `finalize` fires once per participating zone
+  // when the drag ends; if anything in this zone now belongs to a
+  // different collection, that's a cross-collection move we need to
+  // persist.
+  function handleConsider(e: CustomEvent<DndEvent<Request>>) {
+    isDraggingRest.set(true);
+    requests = e.detail.items;
   }
 
-  function handleHeaderDragLeave(e: DragEvent) {
-    const related = e.relatedTarget as HTMLElement | null;
-    const hdr = e.currentTarget as HTMLElement;
-    if (related && hdr.contains(related)) return;
-    isDragTargeted = false;
-    if (hoverExpandTimer) { clearTimeout(hoverExpandTimer); hoverExpandTimer = null; }
-  }
+  async function handleFinalize(e: CustomEvent<DndEvent<Request>>) {
+    requests = e.detail.items;
+    isDraggingRest.set(false);
 
-  async function handleHeaderDrop(e: DragEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    isDragTargeted = false;
-    if (hoverExpandTimer) { clearTimeout(hoverExpandTimer); hoverExpandTimer = null; }
-    const sourceReqId = activeDrag.requestId;
-    const sourceCollId = activeDrag.collectionId;
-    if (!sourceReqId || sourceCollId === collection.id) return;
+    const incoming = e.detail.items.filter(r => r.collectionId !== collection.id);
+    if (incoming.length === 0) return;
+
     try {
-      await cmd.moveRequest(sourceReqId, collection.id);
-      showToast('Request moved', 'success');
-      if (!expanded) { expanded = true; }
-      await loadRequests();
-      await loadCollections();
-    } catch (err) {
-      showToast('Failed to move request', 'error');
-    }
-  }
-
-  // Drag & drop for requests within this collection
-  function handleReqDragOver(e: DragEvent, index: number) {
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-    dragOverReqIndex = index;
-  }
-
-  function handleReqDragLeave() {
-    dragOverReqIndex = null;
-  }
-
-  async function handleReqDrop(e: DragEvent, targetIndex: number) {
-    e.preventDefault();
-    e.stopPropagation();
-    dragOverReqIndex = null;
-
-    const sourceReqId = activeDrag.requestId;
-    const sourceCollId = activeDrag.collectionId;
-
-    if (!sourceReqId) return;
-
-    if (sourceCollId && sourceCollId !== collection.id) {
-      // Moving request from another collection
-      try {
-        await cmd.moveRequest(sourceReqId, collection.id);
-        showToast('Request moved', 'success');
-        await loadRequests();
-        // Trigger reload in source collection too
-        await loadCollections();
-      } catch (err) {
-        showToast('Failed to move request', 'error');
+      for (const req of incoming) {
+        await cmd.moveRequest(req.id, collection.id);
       }
-      return;
-    }
-
-    // Reorder within same collection
-    const currentList = [...requests];
-    const sourceIndex = currentList.findIndex(r => r.id === sourceReqId);
-    if (sourceIndex === -1 || sourceIndex === targetIndex) return;
-
-    const [moved] = currentList.splice(sourceIndex, 1);
-    currentList.splice(targetIndex, 0, moved);
-    requests = currentList;
-    // Note: backend reorder for requests not implemented yet, just update UI
-  }
-
-  // Allow dropping requests into empty collection body area
-  function handleBodyDragOver(e: DragEvent) {
-    if (e.dataTransfer?.types.includes('text/request-id')) {
-      e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-    }
-  }
-
-  async function handleBodyDrop(e: DragEvent) {
-    e.preventDefault();
-    const sourceReqId = activeDrag.requestId;
-    const sourceCollId = activeDrag.collectionId;
-    if (!sourceReqId || sourceCollId === collection.id) return;
-
-    try {
-      await cmd.moveRequest(sourceReqId, collection.id);
-      showToast('Request moved', 'success');
-      if (!expanded) { expanded = true; }
-      await loadRequests();
+      showToast(
+        incoming.length === 1 ? 'Request moved' : `${incoming.length} requests moved`,
+        'success'
+      );
+      // loadCollections bumps collectionsRefreshTrigger, which makes every
+      // CollectionItem re-fetch its requests via the existing $effect — so
+      // both the source and target lists pick up the canonical state.
       await loadCollections();
     } catch (err) {
       showToast('Failed to move request', 'error');
+      await loadRequests();
     }
   }
 </script>
@@ -315,12 +248,8 @@
   <div
     class="ncoll-hdr"
     class:active={isActive}
-    class:drag-target={isDragTargeted}
     onclick={toggle}
     oncontextmenu={handleContextMenu}
-    ondragover={handleHeaderDragOver}
-    ondragleave={handleHeaderDragLeave}
-    ondrop={handleHeaderDrop}
   >
     <div class="coll-icon coll-icon-accent">
       <svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
@@ -357,21 +286,26 @@
   <div
     class="ncoll-body"
     style="max-height:{expanded ? (filteredRequests.length + (addingRequest ? 1 : 0)) * 38 + 200 + 'px' : '0'}"
-    ondragover={handleBodyDragOver}
-    ondrop={handleBodyDrop}
   >
-    {#each filteredRequests as req, i (req.id)}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="req-drop-zone"
-        class:drop-above={dragOverReqIndex === i}
-        ondragover={(e) => handleReqDragOver(e, i)}
-        ondragleave={handleReqDragLeave}
-        ondrop={(e) => handleReqDrop(e, i)}
-      >
-        <RequestItem request={req} ondeleted={handleRequestChanged} />
-      </div>
-    {/each}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="ncoll-dndzone"
+      use:dndzone={{
+        items: searchQuery ? filteredRequests : requests,
+        type: 'rest-request',
+        flipDurationMs: 150,
+        dragDisabled: !!searchQuery,
+        dropTargetStyle: {},
+      }}
+      onconsider={handleConsider}
+      onfinalize={handleFinalize}
+    >
+      {#each (searchQuery ? filteredRequests : requests) as req (req.id)}
+        <div class="rdz-item" data-id={req.id}>
+          <RequestItem request={req} ondeleted={handleRequestChanged} />
+        </div>
+      {/each}
+    </div>
     {#if addingRequest}
       <div class="inline-add-req">
         <InlineInput
@@ -436,11 +370,6 @@
   }
   .ncoll-hdr.active {
     background: var(--n2);
-  }
-  .ncoll-hdr.drag-target {
-    background: color-mix(in srgb, var(--acc) 10%, var(--n2));
-    outline: 1px solid color-mix(in srgb, var(--acc) 40%, transparent);
-    outline-offset: -1px;
   }
   .coll-icon {
     width: 22px;
@@ -551,18 +480,17 @@
     background: var(--e);
     border-bottom: 1px solid var(--b1);
   }
-  .req-drop-zone {
-    position: relative;
+  .ncoll-dndzone {
+    /* Acts as the dndzone target; flexbox with column layout matches the
+       existing per-row stacking so svelte-dnd-action's flip animations
+       align with the request rows. */
+    display: flex;
+    flex-direction: column;
+    min-height: 4px;
   }
-  .req-drop-zone.drop-above::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 24px;
-    right: 8px;
-    height: 2px;
-    background: var(--acc);
-    border-radius: 1px;
-    z-index: 10;
+  .rdz-item {
+    /* Suppress the library's default focus outline when an item gains
+       focus during keyboard drag — looks intrusive in this dense list. */
+    outline: none;
   }
 </style>

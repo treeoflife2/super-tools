@@ -7,7 +7,7 @@ use reqwest;
 use uuid::Uuid;
 
 use crate::db::models::{Request, RequestHeader, RequestParam};
-use crate::shared::http::{build_rest_http_client, classify_ssl_error, max_response_bytes};
+use crate::shared::http::{build_rest_http_client, is_ssl_failure, max_response_bytes};
 
 /// Walk the full error chain to get the root cause
 fn full_error_chain(err: &reqwest::Error) -> String {
@@ -20,16 +20,21 @@ fn full_error_chain(err: &reqwest::Error) -> String {
     msg
 }
 
-/// Map a reqwest send error into a string the frontend can route on.
-///
-/// TLS / certificate failures get the `ssl-error: <reason>` prefix so the
-/// REST UI can offer "Disable SSL verification & retry" instead of just
-/// dumping the raw error text.
-fn map_send_error(err: &reqwest::Error) -> String {
-    if let Some(reason) = classify_ssl_error(err) {
-        format!("ssl-error: {}", reason)
-    } else {
-        format!("Request failed: {}", full_error_chain(err))
+/// Send the request; on a connect-level failure, probe the URL with cert
+/// verification OFF to confirm the failure was TLS-related. If the probe
+/// succeeds, surface `ssl-error:` so the REST UI can offer the disable-
+/// verification guide; otherwise return the original error verbatim.
+async fn send_with_ssl_probe(
+    pool: &SqlitePool,
+    url: &str,
+    builder: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, String> {
+    match builder.send().await {
+        Ok(resp) => Ok(resp),
+        Err(e) if e.is_connect() && is_ssl_failure(pool, url).await => {
+            Err("ssl-error: certificate verification failed".to_string())
+        }
+        Err(e) => Err(format!("Request failed: {}", full_error_chain(&e))),
     }
 }
 
@@ -252,10 +257,7 @@ pub async fn execute_request(
 
     // 6. Execute request and measure time
     let start = Instant::now();
-    let response = req_builder
-        .send()
-        .await
-        .map_err(|e| map_send_error(&e))?;
+    let response = send_with_ssl_probe(pool.inner(), &url_with_params, req_builder).await?;
     let duration_ms = start.elapsed().as_millis() as u64;
 
     // 7. Read response
@@ -435,10 +437,7 @@ pub async fn quick_execute(
     let request_headers_json = serde_json::to_string(&resolved_headers).unwrap_or_default();
 
     let start = Instant::now();
-    let response = req_builder
-        .send()
-        .await
-        .map_err(|e| map_send_error(&e))?;
+    let response = send_with_ssl_probe(pool.inner(), &resolved_url, req_builder).await?;
     let duration_ms = start.elapsed().as_millis() as u64;
 
     let status = response.status().as_u16();
@@ -635,10 +634,7 @@ pub async fn execute_request_internal(
     }
 
     let start = Instant::now();
-    let response = req_builder
-        .send()
-        .await
-        .map_err(|e| map_send_error(&e))?;
+    let response = send_with_ssl_probe(pool, &url_with_params, req_builder).await?;
     let duration_ms = start.elapsed().as_millis() as u64;
 
     let status = response.status().as_u16();
@@ -889,7 +885,7 @@ pub async fn quick_execute_internal(
     }
 
     let start = Instant::now();
-    let response = req_builder.send().await.map_err(|e| map_send_error(&e))?;
+    let response = send_with_ssl_probe(pool, &resolved_url, req_builder).await?;
     let duration_ms = start.elapsed().as_millis() as u64;
 
     let status = response.status().as_u16();

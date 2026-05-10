@@ -13,6 +13,16 @@
 
   let lineCount = $derived(Math.max(1, (value || '').split('\n').length));
 
+  // Refs for scroll-sync between textarea and gutter — without this the
+  // gutter's `overflow: hidden` clips the line numbers at the visible
+  // height (~15 lines) while the textarea scrolls past, so a long
+  // aggregation pipeline shows numbers stuck at 1–15 even on line 30+.
+  let textareaEl = $state<HTMLTextAreaElement | null>(null);
+  let gutterEl = $state<HTMLDivElement | null>(null);
+  function syncGutterScroll() {
+    if (gutterEl && textareaEl) gutterEl.scrollTop = textareaEl.scrollTop;
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
@@ -54,16 +64,18 @@
     </button>
   </div>
   <div class="qe-editor">
-    <div class="qe-gutter">
+    <div class="qe-gutter" bind:this={gutterEl}>
       {#each Array(lineCount) as _, i}
         <span class="qe-line-num">{i + 1}</span>
       {/each}
     </div>
     <textarea
       class="qe-textarea"
+      bind:this={textareaEl}
       bind:value
       {placeholder}
       onkeydown={handleKeydown}
+      onscroll={syncGutterScroll}
       spellcheck="false"
     ></textarea>
   </div>

@@ -614,8 +614,17 @@ pub async fn sql_execute_query(
                 .await
                 .map_err(|e| e.to_string())?;
             let duration_ms = start.elapsed().as_millis() as u64;
+            // Column metadata only attaches to returned rows, so for a
+            // zero-row SELECT we describe the statement separately to
+            // recover the column list. Without this the UI can't tell an
+            // empty SELECT apart from a no-data statement (BEGIN/COMMIT/
+            // INSERT/etc.) and mislabels the result.
             let columns: Vec<String> = if rows.is_empty() {
-                vec![]
+                use sqlx::Executor;
+                p.describe(&query)
+                    .await
+                    .map(|d| d.columns.iter().map(|c| c.name().to_string()).collect())
+                    .unwrap_or_default()
             } else {
                 rows[0].columns().iter().map(|c| c.name().to_string()).collect()
             };
@@ -636,7 +645,11 @@ pub async fn sql_execute_query(
                 .map_err(|e| e.to_string())?;
             let duration_ms = start.elapsed().as_millis() as u64;
             let columns: Vec<String> = if rows.is_empty() {
-                vec![]
+                use sqlx::Executor;
+                p.describe(&query)
+                    .await
+                    .map(|d| d.columns.iter().map(|c| c.name().to_string()).collect())
+                    .unwrap_or_default()
             } else {
                 rows[0].columns().iter().map(|c| c.name().to_string()).collect()
             };
@@ -657,7 +670,11 @@ pub async fn sql_execute_query(
                 .map_err(|e| e.to_string())?;
             let duration_ms = start.elapsed().as_millis() as u64;
             let columns: Vec<String> = if rows.is_empty() {
-                vec![]
+                use sqlx::Executor;
+                p.describe(&query)
+                    .await
+                    .map(|d| d.columns.iter().map(|c| c.name().to_string()).collect())
+                    .unwrap_or_default()
             } else {
                 rows[0].columns().iter().map(|c| c.name().to_string()).collect()
             };

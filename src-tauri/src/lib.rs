@@ -394,6 +394,7 @@ pub fn run() {
             modes::agent::plugins::agent_uninstall_plugin,
             modes::agent::usage::agent_get_usage_analytics,
             modes::agent::usage::agent_fetch_usage_limits,
+            modes::agent::usage::agent_fetch_codex_usage_limits,
             modes::agent::usage::agent_discover_sessions,
             modes::agent::usage::agent_get_session_tokens,
             modes::agent::usage::agent_get_session_context_usage,

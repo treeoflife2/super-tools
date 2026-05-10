@@ -207,14 +207,25 @@
   {:else}
     {#each [...groupedByProject] as [projectName, sessions] (projectName)}
       {@const isCollapsed = collapsedProjects.has(projectName)}
-      <!-- Project group header -->
-      <button class="project-header" onclick={() => toggleProject(projectName)}>
-        <svg class="tree-chevron" class:open={!isCollapsed} viewBox="0 0 24 24">
-          <path d="M9 18l6-6-6-6"/>
-        </svg>
-        <span class="project-name">{projectName}</span>
-        <span class="project-count">{sessions.length}</span>
-      </button>
+      <div class="ncoll">
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="ncoll-hdr" onclick={() => toggleProject(projectName)}>
+          <div class="coll-icon coll-icon-accent">
+            <svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          </div>
+          <div class="ncoll-text">
+            <div class="ncoll-row-top">
+              <span class="ncoll-name">{projectName}</span>
+            </div>
+            <div class="ncoll-row-bot">
+              <span class="ncoll-sub">{sessions.length} session{sessions.length === 1 ? '' : 's'}</span>
+            </div>
+          </div>
+          <svg class="ncoll-arr" class:open={!isCollapsed} viewBox="0 0 24 24">
+            <path d="M9 18l6-6-6-6" stroke="currentColor" fill="none" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </div>
 
       {#if !isCollapsed}
         {#each sessions as session (session.id)}
@@ -262,6 +273,7 @@
           </button>
         {/each}
       {/if}
+      </div>
     {/each}
   {/if}
 </div>
@@ -313,51 +325,82 @@
   }
   .nav-empty-btn:hover { background: var(--c); border-color: var(--b2); color: var(--t1); }
 
-  /* Project group header */
-  .project-header {
-    width: 100%;
-    height: 28px;
-    border: none;
-    background: transparent;
+  .ncoll {
+    border-bottom: 1px solid var(--b1);
+  }
+  .ncoll-hdr {
+    min-height: 44px;
+    padding: 6px 8px;
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 0 10px;
+    gap: 8px;
     cursor: pointer;
-    transition: background 0.08s;
-    text-align: left;
+    transition: background 0.1s;
+    user-select: none;
   }
-  .project-header:hover { background: var(--c); }
-
-  .project-name {
-    font-family: var(--ui);
+  .ncoll-hdr:hover { background: var(--n2); }
+  .ncoll-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .ncoll-row-top, .ncoll-row-bot {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+  .ncoll-name {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--t2);
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ncoll-sub {
     font-size: 10.5px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--t3);
+    font-family: var(--mono);
+    color: var(--t4);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex: 1;
   }
-
-  .project-count {
-    font-size: 9px;
-    font-family: var(--ui);
-    color: var(--t4);
-    background: rgba(255,255,255,0.06);
-    padding: 1px 5px;
-    border-radius: 8px;
+  .coll-icon {
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     flex-shrink: 0;
   }
-
-  .tree-chevron {
-    width: 10px; height: 10px;
-    stroke: var(--t4); fill: none; stroke-width: 2; stroke-linecap: round;
-    flex-shrink: 0; transition: transform 0.15s;
+  .coll-icon-accent {
+    background: color-mix(in srgb, var(--acc) 18%, transparent);
+    color: var(--acc);
   }
-  .tree-chevron.open { transform: rotate(90deg); }
+  .coll-icon svg {
+    width: 13px;
+    height: 13px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+  }
+  .ncoll-arr {
+    width: 12px;
+    height: 12px;
+    stroke: var(--t3);
+    fill: none;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    flex-shrink: 0;
+    transition: transform 0.18s;
+  }
+  .ncoll-arr.open { transform: rotate(90deg); }
 
   /* Session item */
   .session-item {

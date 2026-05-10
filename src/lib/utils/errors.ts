@@ -123,7 +123,11 @@ export function friendlyError(err: unknown): string {
         return `MongoDB error — ${codeMatch[1]}`;
       }
     }
-    return 'MongoDB operation failed — check console for details';
+    // Fall through to the generic cleanup at the bottom — the backend
+    // increasingly returns already-friendly Mongo messages (e.g. "server
+    // is too old: detected MongoDB 4.0 …") and a generic placeholder
+    // would replace that real, actionable text. End users don't open
+    // devtools, so "check console" is never an acceptable UI message.
   }
 
   // Redis errors
@@ -157,9 +161,10 @@ export function friendlyError(err: unknown): string {
   if (msg.length > 0) {
     msg = msg.charAt(0).toUpperCase() + msg.slice(1);
   }
-  // Truncate if too long
-  if (msg.length > 120) {
-    msg = msg.substring(0, 117) + '...';
+  // Truncate runaway errors so a stack-trace dump can't wreck the toast,
+  // but keep enough room for a real two-sentence actionable message.
+  if (msg.length > 280) {
+    msg = msg.substring(0, 277) + '...';
   }
   return msg || 'Something went wrong';
 }

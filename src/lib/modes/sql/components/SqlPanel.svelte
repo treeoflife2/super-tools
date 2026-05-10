@@ -225,12 +225,6 @@
       setSqlTabData(tabId, { loading: true, error: null });
       sqlExecuteQuery(lid, applyRowLimit(exec.query))
         .then((result) => {
-          // No-row statements: toast only, don't open a results tab.
-          if (result.columns.length === 0 && result.rows.length === 0) {
-            setSqlTabData(tabId, { loading: false, error: null });
-            showToast(`Statement executed in ${result.durationMs}ms`, 'success');
-            return;
-          }
           const existing = getSqlTabData(tabId).results || [];
           const label = makeResultLabel(exec.query);
           const newEntry = { label, query: exec.query, result, error: null, connectionId: lid };
@@ -347,14 +341,13 @@
     try {
       const result = await sqlExecuteQuery(lid, applyRowLimit(q));
 
-      // No-row statements (BEGIN/COMMIT/ROLLBACK/VACUUM/INSERT/UPDATE/DELETE/
-      // CREATE/ALTER/DROP, etc.) come back with no columns and no rows.
-      // Showing a "0 rows" panel for those is noise — toast only.
-      if (result.columns.length === 0 && result.rows.length === 0) {
-        setSqlTabData(tabId, { loading: false, error: null });
-        showToast(`Statement executed in ${result.durationMs}ms`, 'success');
-        return;
-      }
+      // Always create/replace a result entry — including for SELECTs that
+      // return zero rows AND for non-data statements (BEGIN/COMMIT/INSERT/
+      // UPDATE/etc.). A toast-only path here was misleading: the previous
+      // result stayed visible, so users couldn't tell whether the new query
+      // had returned nothing or whether the toast belonged to something else.
+      // ResultsTable has dedicated empty-state branches that render the
+      // right thing for each shape.
 
       const entry: SqlResultEntry = { label, query: q, result, error: null, connectionId: lid };
 

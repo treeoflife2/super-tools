@@ -1,6 +1,6 @@
 import { writable, get } from 'svelte/store';
 import type { AgentSession, AgentContext, ContextUsage, GitFileChange } from './types';
-import { agentListSessions, agentListContexts, agentGitStatus, agentGitBranch, agentGitAheadBehind, agentGetSessionContextUsage, agentFetchUsageLimits, agentUpdateTrayTitle, agentGetClaudePlan } from './commands';
+import { agentListSessions, agentListContexts, agentGitStatus, agentGitBranch, agentGitAheadBehind, agentGetSessionContextUsage, agentFetchUsageLimits, agentFetchCodexUsageLimits, agentUpdateTrayTitle, agentGetClaudePlan } from './commands';
 
 // Sessions
 export const agentSessions = writable<AgentSession[]>([]);
@@ -36,9 +36,17 @@ export const agentSessionExited = writable<Map<string, boolean>>(new Map());
 export const agentSoundEnabled = writable<boolean>(true);
 export const agentDockBounceEnabled = writable<boolean>(true);
 
-// Usage limits (fetched from Claude AI API)
+// Usage limits (raw payload from whichever provider is selected for the
+// footer chip — Claude session-key API or Codex/ChatGPT wham/usage). The
+// shape differs per provider; StatusBar.svelte detects which by inspecting
+// the payload.
 export const agentUsageLimits = writable<any>(null);
 export const agentSessionKey = writable<string>('');
+export const agentCodexToken = writable<string>('');
+/** Which provider's usage to show in the Agent footer. Mirrors the
+ *  `agent_footer_usage_provider` setting; hydrated on app boot. */
+export type AgentFooterProvider = 'claude' | 'codex';
+export const agentFooterProvider = writable<AgentFooterProvider>('claude');
 export type AgentUsageAuthState = 'unconfigured' | 'checking' | 'valid' | 'invalid';
 export const agentUsageAuthStatus = writable<{
   state: AgentUsageAuthState;
@@ -56,6 +64,14 @@ export async function loadAgentClaudePlan() {
 }
 
 export async function loadAgentUsageLimits() {
+  const provider = get(agentFooterProvider);
+  if (provider === 'codex') {
+    return loadAgentUsageLimitsCodex();
+  }
+  return loadAgentUsageLimitsClaude();
+}
+
+async function loadAgentUsageLimitsClaude() {
   const key = get(agentSessionKey);
   if (!key) {
     agentUsageLimits.set(null);
@@ -89,6 +105,52 @@ export async function loadAgentUsageLimits() {
     agentUsageAuthStatus.set({
       state: 'invalid',
       message: typeof e === 'string' ? e : e?.message || 'Claude session key is expired or invalid',
+    });
+  }
+}
+
+/** Map a Codex `limit_window_seconds` value to a one-letter tray-title
+ *  prefix. Mirrors the StatusBar's full-word labels (Session/Daily/Weekly)
+ *  but compressed for the menu-bar string length budget.
+ *  S=Session(≤5h)  D=Daily(≤1d)  W=Weekly(≤7d)  M=Monthly(else) */
+function codexTrayPrefix(seconds: number | null | undefined): string {
+  if (seconds == null) return 'L';
+  if (seconds <= 18000) return 'S';
+  if (seconds <= 86400) return 'D';
+  if (seconds <= 604800) return 'W';
+  return 'M';
+}
+
+async function loadAgentUsageLimitsCodex() {
+  const token = get(agentCodexToken);
+  if (!token) {
+    agentUsageLimits.set(null);
+    agentUsageAuthStatus.set({ state: 'unconfigured', message: '' });
+    return;
+  }
+  agentUsageAuthStatus.set({ state: 'checking', message: '' });
+  try {
+    const limits = await agentFetchCodexUsageLimits(token);
+    agentUsageLimits.set(limits);
+    agentUsageAuthStatus.set({ state: 'valid', message: 'Codex token verified' });
+    try {
+      // wham/usage shape: rate_limit.{primary_window, secondary_window}.{used_percent, limit_window_seconds}
+      const primary = limits?.rate_limit?.primary_window;
+      const secondary = limits?.rate_limit?.secondary_window;
+      const parts: string[] = [];
+      if (primary?.used_percent != null) {
+        parts.push(`${codexTrayPrefix(primary.limit_window_seconds)}:${Math.round(primary.used_percent)}%`);
+      }
+      if (secondary?.used_percent != null) {
+        parts.push(`${codexTrayPrefix(secondary.limit_window_seconds)}:${Math.round(secondary.used_percent)}%`);
+      }
+      if (parts.length > 0) await agentUpdateTrayTitle(parts.join(' '));
+    } catch { /* tray update best-effort */ }
+  } catch (e: any) {
+    agentUsageLimits.set(null);
+    agentUsageAuthStatus.set({
+      state: 'invalid',
+      message: typeof e === 'string' ? e : e?.message || 'Codex access token is expired or invalid',
     });
   }
 }

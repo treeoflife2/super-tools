@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { updateAvailable, showWhatsNewModal } from '$lib/utils/updater';
   import { mode } from '$lib/stores/app';
-  import { agentGitBranchName, agentGitFiles, agentGitAhead, agentGitBehind, activeAgentSession, agentUsageLimits, agentUsageAuthStatus, agentShellOpen, agentSessionKey } from '$lib/modes/agent/stores';
+  import { agentGitBranchName, agentGitFiles, agentGitAhead, agentGitBehind, activeAgentSession, agentUsageLimits, agentUsageAuthStatus, agentShellOpen, agentSessionKey, agentCodexToken, agentFooterProvider } from '$lib/modes/agent/stores';
   import { activeModal } from '$lib/stores/app';
   import AgentGitPanel from '$lib/modes/agent/components/AgentGitPanel.svelte';
   import { USAGE_DANGER, USAGE_WARN } from '$lib/shared/constants/colors';
@@ -32,12 +32,41 @@
     return 'var(--acc)';
   }
 
+  /** Map a Codex `limit_window_seconds` to a short chip label. The
+   *  wham/usage endpoint returns the window length but no friendly name,
+   *  so we infer from duration: 5h = Session, 1d = Daily, 7d = Weekly. */
+  function codexWindowLabel(seconds: number | null | undefined): string {
+    if (seconds == null) return 'Limit';
+    if (seconds <= 18000) return 'Session';   // ≤ 5h
+    if (seconds <= 86400) return 'Daily';     // ≤ 1d
+    if (seconds <= 604800) return 'Weekly';   // ≤ 7d
+    return 'Monthly';
+  }
+
   let usageChips = $derived.by((): UsageChip[] => {
     const limits = $agentUsageLimits;
     if (!limits) return [];
     const chips: UsageChip[] = [];
-    // Claude API returns { five_hour: { utilization }, seven_day: { utilization }, seven_day_sonnet: { utilization } }
-    // Also handle alternate shape: { standard: { percentUsed }, extended: { percentUsed } }
+
+    // Codex (chatgpt.com/backend-api/wham/usage) shape:
+    // { rate_limit: { primary_window: { used_percent, limit_window_seconds },
+    //                 secondary_window: { ... } | null }, ... }
+    if (limits.rate_limit) {
+      const primary = limits.rate_limit.primary_window;
+      const secondary = limits.rate_limit.secondary_window;
+      if (primary && primary.used_percent != null) {
+        const pct = Math.round(primary.used_percent);
+        chips.push({ label: codexWindowLabel(primary.limit_window_seconds), pct, color: usageColor(pct) });
+      }
+      if (secondary && secondary.used_percent != null) {
+        const pct = Math.round(secondary.used_percent);
+        chips.push({ label: codexWindowLabel(secondary.limit_window_seconds), pct, color: usageColor(pct) });
+      }
+      return chips;
+    }
+
+    // Claude API: { five_hour: { utilization }, seven_day: { utilization }, seven_day_sonnet: { utilization } }
+    // Alternate shape: { standard: { percentUsed }, extended: { percentUsed } }
     const sessionPct = limits.five_hour?.utilization ?? limits.standard?.percentUsed;
     const weeklyPct = limits.seven_day?.utilization ?? limits.extended?.percentUsed;
     const sonnetPct = limits.seven_day_sonnet?.utilization ?? null;
@@ -93,9 +122,9 @@
           </div>
         {/each}
       </div>
-    {:else if !$agentSessionKey || $agentUsageAuthStatus.state === 'invalid'}
+    {:else if ($agentFooterProvider === 'codex' ? !$agentCodexToken : !$agentSessionKey) || $agentUsageAuthStatus.state === 'invalid'}
       <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-      <div class="si setup-usage" class:invalid={$agentUsageAuthStatus.state === 'invalid'} onclick={() => activeModal.set('settings:agent')} title={$agentUsageAuthStatus.message || 'Configure Claude usage tracking'}>
+      <div class="si setup-usage" class:invalid={$agentUsageAuthStatus.state === 'invalid'} onclick={() => activeModal.set('settings:agent')} title={$agentUsageAuthStatus.message || `Configure ${$agentFooterProvider === 'codex' ? 'Codex' : 'Claude'} usage tracking`}>
         <svg style="width:10px;height:10px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
         <span>{$agentUsageAuthStatus.state === 'invalid' ? 'Usage key expired · reconfigure' : 'Set up usage tracking'}</span>
       </div>

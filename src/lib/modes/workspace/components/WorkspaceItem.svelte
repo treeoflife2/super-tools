@@ -305,13 +305,6 @@
     onclick={() => { selectMe(); toggle(); }}
     oncontextmenu={handleContextMenu}
   >
-    <div class="drag-handle" title="Drag to reorder">
-      <svg viewBox="0 0 24 24" width="10" height="10">
-        <circle cx="8" cy="6" r="1.5" fill="currentColor"/><circle cx="16" cy="6" r="1.5" fill="currentColor"/>
-        <circle cx="8" cy="12" r="1.5" fill="currentColor"/><circle cx="16" cy="12" r="1.5" fill="currentColor"/>
-        <circle cx="8" cy="18" r="1.5" fill="currentColor"/><circle cx="16" cy="18" r="1.5" fill="currentColor"/>
-      </svg>
-    </div>
     <div class="coll-icon coll-icon-accent">
       <!-- 2×2 grid — workspace's own identity, matches the sidebar. -->
       <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
@@ -461,21 +454,6 @@
   .ncoll-hdr.active .ncoll-sub { color: var(--t3); }
   .ncoll-hdr:hover { background: var(--n2); }
   .ncoll-hdr.active { background: var(--n2); }
-
-  .drag-handle {
-    width: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--t4);
-    flex-shrink: 0;
-    cursor: grab;
-    opacity: 0.3;
-    transition: opacity 0.15s, color 0.15s;
-  }
-  .ncoll-hdr:hover .drag-handle { opacity: 0.7; }
-  .drag-handle:hover { color: var(--t2); }
-  .drag-handle:active { cursor: grabbing; }
 
   .coll-icon {
     width: 22px;

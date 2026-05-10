@@ -37,7 +37,7 @@
   import { setConnected, setLastSynced, hasSyncedOnce, markSynced, showSyncRestorePrompt } from '$lib/stores/github';
   import { githubGetStatus, gistCheckExists, gistSyncPush, gistSyncPull } from '$lib/commands/github';
   import { activeModal, aiPanelOpen, mode } from '$lib/stores/app';
-  import { agentSessionKey, loadAgentUsageLimits, loadAgentClaudePlan, agentSessions, activeAgentSession } from '$lib/modes/agent/stores';
+  import { agentSessionKey, agentCodexToken, agentFooterProvider, loadAgentUsageLimits, loadAgentClaudePlan, agentSessions, activeAgentSession } from '$lib/modes/agent/stores';
   import { sshProfiles, activeSshProfile, loadSshProfiles } from '$lib/modes/ssh/stores';
   import type { SshProfile } from '$lib/modes/ssh/types';
   import { explorerConnections, loadExplorerConnections, activeExplorerConnection } from '$lib/modes/explorer/stores';
@@ -630,11 +630,24 @@
     // Load Claude plan from keychain
     loadAgentClaudePlan();
 
-    // Load agent session key and start usage limits polling
+    // Hydrate Agent footer credentials + provider from settings, then
+    // start the usage-limits poll. Either provider being configured is
+    // enough to start polling — the dispatcher inside loadAgentUsageLimits
+    // picks which API to hit based on `agentFooterProvider`.
     try {
-      const key = await getSetting('agent_session_key');
-      if (key) {
-        agentSessionKey.set(key);
+      const [claudeKey, codexToken, footerProvider] = await Promise.all([
+        getSetting('agent_session_key'),
+        getSetting('agent_codex_access_token'),
+        getSetting('agent_footer_usage_provider'),
+      ]);
+      if (claudeKey) agentSessionKey.set(claudeKey);
+      if (codexToken) agentCodexToken.set(codexToken);
+      if (footerProvider === 'claude' || footerProvider === 'codex') {
+        agentFooterProvider.set(footerProvider);
+      }
+      const haveCreds = (claudeKey && (footerProvider ?? 'claude') === 'claude')
+        || (codexToken && footerProvider === 'codex');
+      if (haveCreds) {
         loadAgentUsageLimits();
         usageLimitsInterval = setInterval(() => {
           if (get(mode) === 'agent') loadAgentUsageLimits();

@@ -236,6 +236,80 @@ fn rewrite_uri_host_port(uri: &str, new_port: u16) -> Result<String, String> {
     Ok(format!("{}{}{}:{}{}", scheme, creds, "127.0.0.1", new_port, trailer))
 }
 
+// ── Error classification ────────────────────────────────────────────────
+
+/// Map a MongoDB wire protocol version to the human-readable server
+/// release that introduced it. Used so we can tell users "your server
+/// is MongoDB 4.0" instead of leaving them with the raw "wire version 7".
+fn wire_version_to_mongo(wire: u32) -> &'static str {
+    match wire {
+        0..=1 => "2.4 or older",
+        2 => "2.6",
+        3 => "3.0",
+        4 => "3.2",
+        5 => "3.4",
+        6 => "3.6",
+        7 => "4.0",
+        8 => "4.2",
+        9 => "4.4",
+        12 | 13 => "5.0",
+        17 => "6.0",
+        21 => "7.0",
+        25 => "8.0",
+        _ => "an unsupported version",
+    }
+}
+
+/// Translate a raw mongodb crate error into a user-actionable message
+/// when (and only when) it indicates the remote server is too old for
+/// this driver. Returns `None` for unrelated errors so callers fall
+/// through to the original message.
+///
+/// The mongodb v3 crate supports MongoDB 4.2+; older servers fail the
+/// initial handshake with a wire-version mismatch whose default phrasing
+/// ("Server reports wire version 7, but driver requires at least 8") is
+/// unhelpful — users assume their client is broken instead of upgrading
+/// the server.
+fn friendly_mongo_error(err: &str) -> Option<String> {
+    let lower = err.to_lowercase();
+    if !lower.contains("wire version")
+        && !lower.contains("compatibility")
+        && !lower.contains("incompatible")
+    {
+        return None;
+    }
+
+    let server_re = regex::Regex::new(r"(?:reports?|has)\s+(?:maximum\s+)?wire version\s+(\d+)").ok()?;
+    let driver_re = regex::Regex::new(r"requires?\s+at\s+least\s+(\d+)").ok()?;
+    let server_v = server_re
+        .captures(&lower)
+        .and_then(|c| c.get(1))
+        .and_then(|m| m.as_str().parse::<u32>().ok());
+    let driver_v = driver_re
+        .captures(&lower)
+        .and_then(|c| c.get(1))
+        .and_then(|m| m.as_str().parse::<u32>().ok());
+
+    let driver_label = driver_v.map(wire_version_to_mongo).unwrap_or("4.2 or newer");
+
+    Some(match server_v {
+        Some(s) => format!(
+            "MongoDB server is too old: detected MongoDB {} (wire version {}). \
+             This client requires MongoDB {} or newer. Upgrade your MongoDB server, \
+             or use a legacy MongoDB client to connect to this instance.",
+            wire_version_to_mongo(s),
+            s,
+            driver_label,
+        ),
+        None => format!(
+            "MongoDB server is too old. This client requires MongoDB {} or newer. \
+             Upgrade your MongoDB server, or use a legacy MongoDB client to \
+             connect to this instance.",
+            driver_label,
+        ),
+    })
+}
+
 // ── Connection Management Commands ──────────────────────────────────────
 
 #[tauri::command]
@@ -284,7 +358,11 @@ pub async fn nosql_connect(
                 .database(ping_db)
                 .run_command(doc! { "ping": 1 })
                 .await
-                .map_err(|e| format!("MongoDB ping failed: {}", e))?;
+                .map_err(|e| {
+                    let raw = e.to_string();
+                    friendly_mongo_error(&raw)
+                        .unwrap_or_else(|| format!("MongoDB ping failed: {}", raw))
+                })?;
             NoSqlPool::Mongo(client)
         }
         "redis" => {
@@ -364,7 +442,11 @@ pub async fn nosql_test_connection(
                 .database(ping_db)
                 .run_command(doc! { "ping": 1 })
                 .await
-                .map_err(|e| format!("MongoDB ping failed: {}", e))?;
+                .map_err(|e| {
+                    let raw = e.to_string();
+                    friendly_mongo_error(&raw)
+                        .unwrap_or_else(|| format!("MongoDB ping failed: {}", raw))
+                })?;
         }
         "redis" => {
             let uri = build_redis_uri(&config);

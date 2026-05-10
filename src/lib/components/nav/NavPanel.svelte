@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { mode, navOpen } from '$lib/stores/app';
+  import { mode, navOpen, activeModal } from '$lib/stores/app';
   import RestNav from './RestNav.svelte';
   import SqlNav from '$lib/modes/sql/components/SqlNav.svelte';
   import NoSqlNav from '$lib/modes/nosql/components/NoSqlNav.svelte';
@@ -12,6 +12,33 @@
   import { getNavPinned, setNavPinned } from '$lib/shared/constants/storage';
   import { AGENT_EVENT, WORKSPACE_EVENT } from '$lib/shared/constants/events';
   import { showContextMenu } from '$lib/shared/primitives/contextmenu';
+  import { get } from 'svelte/store';
+  import { inboxUnreadCount, markInboxRead, coworkers } from '$lib/modes/workspace/stores';
+  import { tabs as sharedTabs, activeTabId, addTab, activateTab } from '$lib/shared/stores/tabs';
+
+  const inboxActive = $derived(
+    $mode === 'workspace' && !!$sharedTabs.find(t => t.id === $activeTabId && t.key === 'inbox'),
+  );
+  const coworkersActive = $derived(
+    $mode === 'workspace' && !!$sharedTabs.find(t => t.id === $activeTabId && t.key === 'coworkers'),
+  );
+
+  function openInbox() {
+    const key = 'inbox';
+    const existing = get(sharedTabs).find(t => t.mode === 'workspace' && t.key === key);
+    if (existing) activateTab(existing.id);
+    else addTab('Inbox', 'workspace', key, 'var(--acc)');
+    mode.set('workspace');
+    markInboxRead();
+  }
+
+  function openCoworkers() {
+    const key = 'coworkers';
+    const existing = get(sharedTabs).find(t => t.mode === 'workspace' && t.key === key);
+    if (existing) activateTab(existing.id);
+    else addTab('Co-workers', 'workspace', key, 'var(--acc)');
+    mode.set('workspace');
+  }
 
   let searchPerMode = $state<Record<string, string>>({ rest: '', sql: '', nosql: '', agent: '', ssh: '', workspace: '' });
   let searchQuery = $derived(searchPerMode[$mode] ?? '');
@@ -140,38 +167,145 @@
   class:overlay={!navPinned && $navOpen}
   onmouseleave={handleMouseLeavePanel}
 >
-  <!-- Single combined header — search bar with inline (+) and (⋯) buttons.
-       Replaces the old two-row "title bar + search row" layout. The data-drag-region
-       attr lets users drag the window from blank header chrome; the global
-       mousedown handler in +layout.svelte excludes inputs/buttons so clicks
-       still register on the controls. -->
-  <div class="nav-header" data-drag-region>
-    <div class="nav-search-wrap">
-      <svg class="nav-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="11" cy="11" r="8"/>
-        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-      </svg>
-      <input
-        type="text"
-        class="nav-search-input"
-        placeholder={searchPlaceholders[$mode] ?? 'Search…'}
-        value={searchQuery}
-        oninput={(e) => setSearch((e.target as HTMLInputElement).value)}
-      />
+  {#if $mode === 'sql' || $mode === 'nosql' || $mode === 'ssh' || $mode === 'explorer'}
+    {@const ctaLabel = $mode === 'ssh' ? 'New SSH Profile' : 'New Connection'}
+    {@const sectionLabel = $mode === 'ssh' ? 'PROFILES' : 'CONNECTIONS'}
+    <div class="nav-header-agent" data-drag-region>
+      <div class="ah-cta-row">
+        <button class="ah-cta" onclick={handleAddClick}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+          <span>{ctaLabel}</span>
+        </button>
+        <button class="ah-pin-btn" title={navPinned ? 'Unpin sidebar' : 'Pin sidebar'} onclick={togglePin}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2.5"/>
+            <line x1="9" y1="3" x2="9" y2="21"/>
+            {#if !navPinned}<line x1="3" y1="3" x2="21" y2="21"/>{/if}
+          </svg>
+        </button>
+      </div>
+      <div class="ah-divider"></div>
+      <div class="ah-section">{sectionLabel}</div>
     </div>
-    {#if $mode !== 'history'}
-      <button class="nav-action nav-add" title={addLabels[$mode]} onclick={handleAddClick}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 5v14M5 12h14"/>
+  {:else if $mode === 'rest'}
+    <div class="nav-header-agent" data-drag-region>
+      <div class="ah-cta-row">
+        <button class="ah-cta" onclick={handleAddClick}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+          <span>New Collection</span>
+        </button>
+        <button class="ah-pin-btn" title={navPinned ? 'Unpin sidebar' : 'Pin sidebar'} onclick={togglePin}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2.5"/>
+            <line x1="9" y1="3" x2="9" y2="21"/>
+            {#if !navPinned}<line x1="3" y1="3" x2="21" y2="21"/>{/if}
+          </svg>
+        </button>
+      </div>
+      <div class="ah-grid">
+        <button class="ah-card" onclick={() => mode.set('history')}>
+          <svg class="ah-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span class="ah-card-label">History</span>
+        </button>
+        <button class="ah-card" onclick={() => (showImportExport = true)}>
+          <svg class="ah-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span class="ah-card-label">Import / Export</span>
+        </button>
+      </div>
+      <div class="ah-divider"></div>
+      <div class="ah-section">COLLECTIONS</div>
+    </div>
+  {:else if $mode === 'workspace'}
+    <div class="nav-header-agent" data-drag-region>
+      <div class="ah-cta-row">
+        <button class="ah-cta" onclick={handleAddClick}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+          <span>New Workspace</span>
+        </button>
+        <button class="ah-pin-btn" title={navPinned ? 'Unpin sidebar' : 'Pin sidebar'} onclick={togglePin}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2.5"/>
+            <line x1="9" y1="3" x2="9" y2="21"/>
+            {#if !navPinned}<line x1="3" y1="3" x2="21" y2="21"/>{/if}
+          </svg>
+        </button>
+      </div>
+      <div class="ah-grid">
+        <button class="ah-card" class:active={inboxActive} onclick={openInbox}>
+          <svg class="ah-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+          <span class="ah-card-label">
+            Inbox
+            {#if $inboxUnreadCount > 0}<span class="ah-card-badge">{$inboxUnreadCount > 99 ? '99+' : $inboxUnreadCount}</span>{/if}
+          </span>
+        </button>
+        <button class="ah-card" class:active={coworkersActive} onclick={openCoworkers}>
+          <svg class="ah-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 19a6.5 6.5 0 0 1 13 0"/><circle cx="17" cy="6" r="2.4"/><path d="M14 13a4.5 4.5 0 0 1 8.5 2"/></svg>
+          <span class="ah-card-label">
+            Co-workers
+            {#if $coworkers.length > 0}<span class="ah-card-badge muted">{$coworkers.length}</span>{/if}
+          </span>
+        </button>
+      </div>
+      <div class="ah-divider"></div>
+      <div class="ah-section">WORKSPACES</div>
+    </div>
+  {:else if $mode === 'agent'}
+    <div class="nav-header-agent" data-drag-region>
+      <div class="ah-cta-row">
+        <button class="ah-cta" onclick={handleAddClick}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+          <span>New Session</span>
+        </button>
+        <button class="ah-pin-btn" title={navPinned ? 'Unpin sidebar' : 'Pin sidebar'} onclick={togglePin}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2.5"/>
+            <line x1="9" y1="3" x2="9" y2="21"/>
+            {#if !navPinned}<line x1="3" y1="3" x2="21" y2="21"/>{/if}
+          </svg>
+        </button>
+      </div>
+      <div class="ah-grid">
+        <button class="ah-card" onclick={() => activeModal.set('settings:agent:contexts')}>
+          <svg class="ah-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>
+          <span class="ah-card-label">Contexts</span>
+        </button>
+        <button class="ah-card" onclick={() => activeModal.set('settings:agent:plugins')}>
+          <svg class="ah-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11V9a2 2 0 00-2-2h-4V3a2 2 0 00-2-2h-4a2 2 0 00-2 2v4H4a2 2 0 00-2 2v2a4 4 0 010 8v2a2 2 0 002 2h4v-2a4 4 0 018 0v2h4a2 2 0 002-2v-4a4 4 0 010-8z"/></svg>
+          <span class="ah-card-label">Plugins</span>
+        </button>
+      </div>
+      <div class="ah-divider"></div>
+      <div class="ah-section">SESSIONS</div>
+    </div>
+  {:else}
+    <div class="nav-header" data-drag-region>
+      <div class="nav-search-wrap">
+        <svg class="nav-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"/>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input
+          type="text"
+          class="nav-search-input"
+          placeholder={searchPlaceholders[$mode] ?? 'Search…'}
+          value={searchQuery}
+          oninput={(e) => setSearch((e.target as HTMLInputElement).value)}
+        />
+      </div>
+      {#if $mode !== 'history'}
+        <button class="nav-action nav-add" title={addLabels[$mode]} onclick={handleAddClick}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+        </button>
+      {/if}
+      <button class="nav-action nav-overflow" title="More" onclick={openOverflow}>
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>
         </svg>
       </button>
-    {/if}
-    <button class="nav-action nav-overflow" title="More" onclick={openOverflow}>
-      <svg viewBox="0 0 24 24" fill="currentColor">
-        <circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>
-      </svg>
-    </button>
-  </div>
+    </div>
+  {/if}
 
   <div class="nav-body">
     {#if $mode === 'history'}
@@ -309,6 +443,148 @@
     border-color: var(--acc);
   }
   .nav-overflow svg { width: 16px; height: 16px; }
+
+  .nav-header-agent {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    padding: 14px 12px 0;
+    gap: 14px;
+  }
+
+  .ah-cta-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .ah-pin-btn {
+    width: 44px;
+    height: 44px;
+    border: 1px solid color-mix(in srgb, var(--acc) 22%, var(--b1));
+    background: color-mix(in srgb, var(--acc) 6%, transparent);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: color-mix(in srgb, var(--acc) 80%, var(--t1));
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+    padding: 0;
+    flex-shrink: 0;
+  }
+  .ah-pin-btn svg { width: 16px; height: 16px; }
+  .ah-pin-btn:hover {
+    background: color-mix(in srgb, var(--acc) 14%, transparent);
+    border-color: color-mix(in srgb, var(--acc) 45%, var(--b1));
+    color: var(--t1);
+  }
+
+  .ah-cta {
+    flex: 1;
+    height: 44px;
+    border: 1px solid color-mix(in srgb, var(--acc) 22%, var(--b1));
+    background: color-mix(in srgb, var(--acc) 6%, transparent);
+    color: var(--t2);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    cursor: pointer;
+    font-family: var(--ui);
+    font-size: 14px;
+    font-weight: 600;
+    transition: background 0.12s, border-color 0.12s, color 0.12s, transform 0.08s;
+  }
+  .ah-cta svg {
+    width: 16px;
+    height: 16px;
+    color: color-mix(in srgb, var(--acc) 80%, var(--t1));
+  }
+  .ah-cta:hover {
+    background: color-mix(in srgb, var(--acc) 14%, transparent);
+    border-color: color-mix(in srgb, var(--acc) 45%, var(--b1));
+    color: var(--t1);
+  }
+  .ah-cta:active { transform: scale(0.985); }
+
+  .ah-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .ah-card {
+    border: 1px solid color-mix(in srgb, var(--acc) 22%, var(--b1));
+    background: color-mix(in srgb, var(--acc) 6%, transparent);
+    color: var(--t2);
+    border-radius: 10px;
+    padding: 14px 14px 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    cursor: pointer;
+    font-family: var(--ui);
+    font-size: 13px;
+    font-weight: 500;
+    text-align: left;
+    transition: background 0.12s, border-color 0.12s, color 0.12s, transform 0.08s;
+  }
+  .ah-card:hover {
+    background: color-mix(in srgb, var(--acc) 14%, transparent);
+    border-color: color-mix(in srgb, var(--acc) 45%, var(--b1));
+    color: var(--t1);
+  }
+  .ah-card:active { transform: scale(0.985); }
+  .ah-card.active {
+    background: color-mix(in srgb, var(--acc) 18%, transparent);
+    border-color: color-mix(in srgb, var(--acc) 55%, var(--b1));
+    color: var(--t1);
+  }
+  .ah-card-icon {
+    width: 18px;
+    height: 18px;
+    color: color-mix(in srgb, var(--acc) 80%, var(--t1));
+  }
+  .ah-card-label {
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .ah-card-badge {
+    min-width: 16px;
+    height: 16px;
+    padding: 0 5px;
+    border-radius: 8px;
+    background: var(--acc);
+    color: #fff;
+    font-size: 9.5px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+    font-family: var(--ui);
+  }
+  .ah-card-badge.muted {
+    background: color-mix(in srgb, var(--t1) 14%, transparent);
+    color: var(--t2);
+    font-weight: 600;
+  }
+
+  .ah-divider {
+    height: 1px;
+    background: var(--b1);
+    opacity: 0.6;
+    margin: 4px 0;
+  }
+  .ah-section {
+    padding: 0 4px 4px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--acc);
+    font-family: var(--ui);
+  }
 
   .nav-body {
     flex: 1;
