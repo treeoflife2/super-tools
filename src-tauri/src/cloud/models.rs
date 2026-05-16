@@ -26,8 +26,26 @@ pub struct CloudProvider {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CloudEntitlements {
-    pub features: Vec<String>,
-    pub limits: serde_json::Value,
+    pub plan: String,
+    #[serde(default)]
+    pub credits: Option<CloudCredits>,
+    #[serde(default)]
+    pub subscription: Option<CloudSubscription>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudCredits {
+    pub remaining: i64,
+    pub allowance: i64,
+    pub resets_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudSubscription {
+    pub status: String,
+    pub cancel_at_period_end: bool,
 }
 
 /// Response from /api/auth/{provider}/exchange and /api/auth/me.
@@ -94,4 +112,69 @@ pub struct CloudStatus {
     pub providers: Vec<CloudProvider>,
     pub plan: String,
     pub last_synced: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudPricing {
+    pub schema_version: i64,
+    pub plans: Vec<CloudPricingPlan>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudPricingPlan {
+    pub id: String,
+    pub price_usd: i64,
+    pub discount: Option<CloudPricingDiscount>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudPricingDiscount {
+    pub percent: i64,
+    pub code: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudCheckoutRequest {
+    pub plan: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudCheckoutResponse {
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudPortalResponse {
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAiBalance {
+    pub remaining: i64,
+    pub allowance: i64,
+    pub resets_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAiUsage {
+    pub entries: Vec<CloudAiUsageEntry>,
+    pub next_before: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAiUsageEntry {
+    pub occurred_at: String,
+    pub operation: String,
+    pub clauge_credits: i64,
+    pub cost_usd_micros: i64,
+    pub request_id: String,
 }
