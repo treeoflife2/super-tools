@@ -20,6 +20,9 @@
   <img src="https://img.shields.io/badge/built%20with-Rust%20%2B%20Tauri-CE422B?style=flat-square" alt="Rust + Tauri">
   <img src="https://img.shields.io/badge/binary-~20%20MB-4f94d4?style=flat-square" alt="~20 MB">
   <img src="https://img.shields.io/badge/MCP-built--in-1dc880?style=flat-square" alt="MCP built-in">
+  <a href="https://x.com/clauge_in"><img src="https://img.shields.io/badge/X%2FTwitter-white?logo=x&style=flat&logoColor=black"></a>
+  
+
 </p>
 
 <p align="center">
