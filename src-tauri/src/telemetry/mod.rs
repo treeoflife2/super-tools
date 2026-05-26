@@ -1,3 +1,8 @@
+#![allow(dead_code)] // LOCAL FORK: scheduler is neutralized in scheduler::spawn,
+                      // which leaves payload assembly + restore() helpers unused.
+                      // Keeping them compiled (just not called) so upstream merges
+                      // touch zero lines outside scheduler.rs's spawn().
+
 // Telemetry — append-only daily heartbeats.
 //
 // Design rules (the user signed off explicitly):

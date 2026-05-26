@@ -357,6 +357,22 @@
     return getTerminalTheme(app.theme, app.accentColor);
   }
 
+  // LOCAL FORK: VSCode-style clipboard helpers for xterm. Right-click pastes
+  // from clipboard. Ctrl+C / Ctrl+V handling lives in each terminal's
+  // attachCustomKeyEventHandler (close to the existing find/escape logic).
+  function attachVscodeClipboard(t: Terminal, container: HTMLDivElement) {
+    container.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      // If there's an active selection, copy. Otherwise paste.
+      if (t.hasSelection()) {
+        navigator.clipboard.writeText(t.getSelection()).catch(() => {});
+        t.clearSelection();
+      } else {
+        navigator.clipboard.readText().then((text) => { if (text) t.paste(text); }).catch(() => {});
+      }
+    });
+  }
+
   function createTermEntry(sessionId: string): { term: Terminal; fitAddon: FitAddon; searchAddon: SearchAddon; container: HTMLDivElement; terminalId: string | null; _exitBuffer?: string } {
     const t = new Terminal({
       cursorBlink: true,
@@ -370,7 +386,7 @@
       rescaleOverlappingGlyphs: true,
       cursorStyle: 'bar',
       cursorInactiveStyle: 'outline',
-      rightClickSelectsWord: true,
+      rightClickSelectsWord: false, // LOCAL FORK: right-click pastes (VSCode-like)
     });
     const fa = new FitAddon();
     const sa = new SearchAddon();
@@ -389,6 +405,8 @@
       termFindResultCount = resultCount;
     });
 
+    attachVscodeClipboard(t, container); // LOCAL FORK: Ctrl+C/V + right-click paste
+
     t.attachCustomKeyEventHandler((e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'f' && e.type === 'keydown') {
         openTermFind();
@@ -396,6 +414,20 @@
       }
       if (e.key === 'Escape' && e.type === 'keydown' && termFindOpen) {
         closeTermFind();
+        return false;
+      }
+      // VSCode-style: Ctrl+C copies if there's a selection, otherwise falls
+      // through to xterm so the PTY gets the normal interrupt.
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C') && e.type === 'keydown' && !e.shiftKey) {
+        if (t.hasSelection()) {
+          navigator.clipboard.writeText(t.getSelection()).catch(() => {});
+          t.clearSelection();
+          return false;
+        }
+      }
+      // Ctrl+V (or Ctrl+Shift+V) → paste from clipboard.
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V') && e.type === 'keydown') {
+        navigator.clipboard.readText().then((text) => { if (text) t.paste(text); }).catch(() => {});
         return false;
       }
       return true;
@@ -458,8 +490,15 @@
     entry.container.style.display = 'block';
     try { entry.term.options.scrollback = 10000; } catch (_) {}
     activeTermEntry = entry;
-    requestAnimationFrame(() => {
-      try { entry.fitAddon.fit(); } catch (_) {}
+    // LOCAL FORK: double rAF — single rAF runs before the display:block
+    // layout change is committed when the container was previously hidden,
+    // so fit() measures 0×0. Second rAF runs after paint with real dims.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      try {
+        entry.fitAddon.fit();
+        const dims = entry.fitAddon.proposeDimensions();
+        if (dims && entry.terminalId) agentResizeTerminal(entry.terminalId, dims.cols, dims.rows).catch(() => {});
+      } catch (_) {}
       if (termFindOpen) {
         termFindInputEl?.focus();
         if (termFindQuery) {
@@ -473,7 +512,7 @@
       } else {
         try { entry.term.focus(); } catch (_) {}
       }
-    });
+    }));
   }
 
   function createShellEntry(sessionId: string): { term: Terminal; fitAddon: FitAddon; searchAddon: SearchAddon; container: HTMLDivElement; terminalId: string | null } {
@@ -488,7 +527,7 @@
       rescaleOverlappingGlyphs: true,
       cursorStyle: 'bar',
       cursorInactiveStyle: 'outline',
-      rightClickSelectsWord: true,
+      rightClickSelectsWord: false, // LOCAL FORK: right-click pastes (VSCode-like)
     });
     const fa = new FitAddon();
     const sa = new SearchAddon();
@@ -507,6 +546,8 @@
       shellFindResultCount = resultCount;
     });
 
+    attachVscodeClipboard(t, container); // LOCAL FORK: Ctrl+C/V + right-click paste
+
     t.attachCustomKeyEventHandler((e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'f' && e.type === 'keydown') {
         openShellFind();
@@ -514,6 +555,17 @@
       }
       if (e.key === 'Escape' && e.type === 'keydown' && shellFindOpen) {
         closeShellFind();
+        return false;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C') && e.type === 'keydown' && !e.shiftKey) {
+        if (t.hasSelection()) {
+          navigator.clipboard.writeText(t.getSelection()).catch(() => {});
+          t.clearSelection();
+          return false;
+        }
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V') && e.type === 'keydown') {
+        navigator.clipboard.readText().then((text) => { if (text) t.paste(text); }).catch(() => {});
         return false;
       }
       return true;
@@ -569,8 +621,14 @@
     sEntry.container.style.display = 'block';
     try { sEntry.term.options.scrollback = 5000; } catch (_) {}
     activeShellEntry = sEntry;
-    requestAnimationFrame(() => {
-      try { sEntry.fitAddon.fit(); } catch (_) {}
+    // LOCAL FORK: double rAF + sync PTY resize so the shell doesn't render
+    // at the 24×80 default when first shown. Same fix as showTermEntry.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      try {
+        sEntry.fitAddon.fit();
+        const dims = sEntry.fitAddon.proposeDimensions();
+        if (dims && sEntry.terminalId) agentResizeTerminal(sEntry.terminalId, dims.cols, dims.rows).catch(() => {});
+      } catch (_) {}
       if (shellFindOpen) {
         shellFindInputEl?.focus();
         if (shellFindQuery) {
@@ -582,7 +640,7 @@
           } catch { shellFindNoMatch = true; }
         }
       }
-    });
+    }));
   }
 
   function refitAll(sendPtyResize = false) {
@@ -851,7 +909,15 @@
       // own encoded Claude dir → exactly one session file in there →
       // capture is unambiguous and resume after restart always finds
       // the right file. Title is kept as a readable suffix.
-      if (!session.worktreePath && !session.claudeSessionId) {
+      // LOCAL FORK: auto-worktree creation disabled. Upstream auto-creates
+      // a git worktree under <project>/.clauge-worktrees/clauge/<branch> for
+      // every new session, which (a) spawns Claude in that subdir instead
+      // of the project root, and (b) on Windows under cmd.exe the forward
+      // slash in the generated branch name produced an invalid path → "the
+      // filename, directory name, or volume label syntax is incorrect".
+      // Sessions now run directly in `session.projectPath`. Flip this back
+      // by removing the `false &&` guard.
+      if (false && !session.worktreePath && !session.claudeSessionId) {
         try {
           const isGit = await agentIsGitRepo(session.projectPath);
           if (isGit) {
@@ -1186,9 +1252,23 @@
       // Start context usage polling (Feature 2)
       startContextUsagePolling(session);
 
-      // Visual fit only — ResizeObserver handles debounced PTY resize
+      // LOCAL FORK: fit + sync-resize the PTY right after spawn instead of
+      // waiting for the ResizeObserver's 100ms debounce. Upstream's single
+      // rAF + observer-debounce caused Claude's splash to be drawn at the
+      // PTY default (24×80) BEFORE the resize signal landed — leaving the
+      // text crammed in the top-left until the user toggled the shell to
+      // force a refit. Double rAF ensures the panel layout is fully
+      // committed (.agent-terminal-main width % is reactive on shell
+      // open/close), then we propose dims and push them to the PTY so
+      // Claude's first paint already matches the visible canvas.
       requestAnimationFrame(() => {
-        try { entry!.fitAddon.fit(); } catch (_) {}
+        requestAnimationFrame(() => {
+          try {
+            entry!.fitAddon.fit();
+            const dims = entry!.fitAddon.proposeDimensions();
+            if (dims && termId) agentResizeTerminal(termId, dims.cols, dims.rows).catch(() => {});
+          } catch (_) {}
+        });
       });
 
       if (get(agentShellOpen)) spawnShellForSession(session);
@@ -1756,6 +1836,12 @@
     overflow: hidden;
     opacity: 1;
     transition: opacity 0.35s ease;
+    /* LOCAL FORK: VSCode-style inner padding so xterm text doesn't sit
+       flush against the top-left corner. FitAddon measures xterm's own
+       box, so padding here shrinks the available area cleanly and the
+       grid recalculates on the next fit(). */
+    padding: 6px 8px;
+    box-sizing: border-box;
   }
   .agent-terminal-container :global(.xterm) {
     height: 100% !important;
@@ -1930,6 +2016,9 @@
     min-width: 0;
     overflow: hidden;
     transition: opacity 0.15s ease;
+    /* LOCAL FORK: VSCode-style inner padding — see .agent-terminal-container */
+    padding: 6px 8px;
+    box-sizing: border-box;
   }
   .agent-shell-container.term-hidden {
     opacity: 0;

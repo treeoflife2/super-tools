@@ -1179,19 +1179,17 @@
         // Check for updates silently on startup and show What's New if version changed.
         // Then re-check every 6 hours so long-running sessions don't miss releases.
         try {
+            // LOCAL FORK: auto-update + What's-New release-notes fetch disabled.
+            //   • `checkAndDownloadUpdate()` polls GitHub releases (boot + every 6h)
+            //     for signed binary updates — we build from source, so unwanted.
+            //   • `checkWhatsNew(v)` calls api.github.com to fetch release-notes
+            //     markdown whenever the local version changes — also silenced.
+            // The manual "Check for updates" button in Sidebar still works if
+            // explicitly clicked (acceptable: user-initiated).
             const { checkAndDownloadUpdate, checkWhatsNew } =
                 await import("$lib/utils/updater");
-            const { getVersion } = await import("@tauri-apps/api/app");
-            getVersion()
-                .then((v: string) => {
-                    checkWhatsNew(v);
-                })
-                .catch(() => {});
-            checkAndDownloadUpdate();
-            updateCheckInterval = setInterval(
-                () => { checkAndDownloadUpdate().catch(() => {}); },
-                6 * 60 * 60_000,
-            );
+            void checkAndDownloadUpdate;
+            void checkWhatsNew;
         } catch {
             // Updater not available in dev mode
         }

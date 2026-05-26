@@ -1,6 +1,6 @@
 use crate::modes::agent::models::{TerminalEntry, TerminalOutputPayload, TerminalState};
 use crate::shared::cli::{registry::runner_for, runner::{CliRunner, SpawnOpts}};
-use crate::shared::platform::shell::default_user_shell;
+use crate::shared::platform::shell::{default_user_shell, ShellKind};
 use base64::Engine;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
@@ -23,6 +23,37 @@ fn apply_windows_env(cmd: &mut CommandBuilder) {
 
 #[cfg(not(target_os = "windows"))]
 fn apply_windows_env(_cmd: &mut CommandBuilder) {}
+
+/// Build a shell-specific `cd <project_path> && <cmd>` prefix.
+///
+/// Although `CommandBuilder::cwd()` sets the OS-level working directory of
+/// the spawned shell process, PowerShell loads `$PROFILE` and bash/zsh source
+/// `.bashrc`/`.zshrc` BEFORE executing the inline `-Command` / `-c` payload.
+/// Any profile that does `Set-Location ~`, `cd $HOME`, or similar will
+/// silently drift the cwd away from the project path the user picked in the
+/// New Session modal. Prepending an explicit `cd` here runs AFTER the
+/// profile, so the agent always lands in the project directory.
+fn prepend_cd(shell_kind: ShellKind, project_path: &str, cmd: &str) -> String {
+    match shell_kind {
+        ShellKind::PowerShell => {
+            // Single quotes are literal in PowerShell; embedded single quotes
+            // escape as ''. `-LiteralPath` skips wildcard expansion.
+            let escaped = project_path.replace('\'', "''");
+            format!("Set-Location -LiteralPath '{}'; {}", escaped, cmd)
+        }
+        ShellKind::Cmd => {
+            // /D handles drive-letter changes (e.g. C: → D:). cmd has no
+            // single-quote string form, so use double quotes.
+            let escaped = project_path.replace('"', "\\\"");
+            format!("cd /d \"{}\" && {}", escaped, cmd)
+        }
+        // bash/zsh/fish/unknown: POSIX single-quote escaping.
+        _ => {
+            let escaped = project_path.replace('\'', "'\\''");
+            format!("cd '{}' && {}", escaped, cmd)
+        }
+    }
+}
 
 #[tauri::command]
 pub fn agent_spawn_terminal(
@@ -72,10 +103,27 @@ pub fn agent_spawn_terminal(
 
     let (shell_path, shell_kind) = default_user_shell();
     let mut cmd = CommandBuilder::new(&shell_path);
+    // LOCAL FORK: CLI runners (claude.rs / codex.rs / etc.) escape embedded
+    // single quotes POSIX-style as `'\''` (close, escaped, reopen). That is
+    // correct for bash/zsh/fish but a parse error in PowerShell, where the
+    // way to embed a single quote inside a single-quoted string is `''`
+    // (doubled). Claude's purpose prompts contain apostrophes ("you're",
+    // "it's"), so on Windows the whole inline -Command argument errored
+    // with "the string is missing the terminator: '". Doing the rewrite
+    // here keeps the per-CLI runner files untouched → cleaner upstream
+    // merges.
+    let spawn_cmd = match shell_kind {
+        ShellKind::PowerShell => spawn_cmd.replace("'\\''", "''"),
+        _ => spawn_cmd,
+    };
+    // Wrap with an explicit cd so the agent lands in `project_path` even when
+    // the user's shell profile (PowerShell $PROFILE, ~/.zshrc, ~/.bashrc) does
+    // its own `cd` after the shell loads. See prepend_cd's doc-comment.
+    let wrapped_cmd = prepend_cd(shell_kind, &project_path, &spawn_cmd);
     // For bash/zsh: -l (login) sources ~/.zprofile but tools like nvm/fnm/asdf
     // configure node on PATH inside ~/.zshrc which only loads with -i. PowerShell
     // and cmd.exe don't have these concepts; ShellKind handles that.
-    for arg in shell_kind.exec_command_argv(&spawn_cmd) {
+    for arg in shell_kind.exec_command_argv(&wrapped_cmd) {
         cmd.arg(&arg);
     }
     cmd.cwd(&project_path);

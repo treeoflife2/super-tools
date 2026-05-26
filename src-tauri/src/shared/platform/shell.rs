@@ -97,8 +97,20 @@ impl ShellKind {
 /// no scripting parity with bash.
 pub fn default_user_shell() -> (String, ShellKind) {
     let path = if cfg!(target_os = "windows") {
-        if std::env::var("POWERSHELL_DISTRIBUTION_CHANNEL").is_ok() {
+        // LOCAL FORK: prefer PowerShell over cmd.exe on Windows. Upstream
+        // falls back to %COMSPEC% (typically cmd.exe) when
+        // POWERSHELL_DISTRIBUTION_CHANNEL isn't set — and that env var is
+        // only set when Tauri itself was launched from a pwsh terminal,
+        // which is never true for GUI launches. cmd.exe has weak PTY
+        // semantics, no Unicode by default, and mangles inline command
+        // strings (single quotes don't quote, etc.), causing the
+        // `--append-system-prompt 'text'` argument to break Claude spawns.
+        // Order: pwsh.exe (PowerShell 7+) → powershell.exe (built-in 5.1)
+        // → cmd.exe last-resort.
+        if crate::shared::platform::path::find_binary("pwsh").is_some() {
             "pwsh.exe".to_string()
+        } else if crate::shared::platform::path::find_binary("powershell").is_some() {
+            "powershell.exe".to_string()
         } else {
             std::env::var("COMSPEC").unwrap_or_else(|_| "powershell.exe".to_string())
         }

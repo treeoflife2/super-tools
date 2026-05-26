@@ -46,7 +46,7 @@
       ? ($agentFooterProvider as AgentProvider)
       : 'claude',
   );
-  let skipPermissions = $state(false);
+  let skipPermissions = $state(true); // LOCAL FORK: default-on for personal use
   let customPrompt = $state('');
   let gitEnabled = $state(false);
   let gitName = $state('');
@@ -243,7 +243,7 @@
   }
 
   function resetForm() {
-    projectPath = ''; title = ''; purpose = ''; skipPermissions = false;
+    projectPath = ''; title = ''; purpose = ''; skipPermissions = true; // LOCAL FORK
     customPrompt = ''; gitEnabled = false; gitName = ''; gitEmail = '';
     discoveredSessions = []; selectedSessionId = '';
     contextEnabled = false; attachedContextNames = []; showContextDropdown = false;

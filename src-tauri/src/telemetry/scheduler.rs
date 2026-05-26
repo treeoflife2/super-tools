@@ -46,13 +46,13 @@ const FLUSH_RETRY_SECS: i64 = 60 * 60;                  // 1h on failure
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL_MAX: Duration = Duration::from_secs(15 * 60); // 15m max sleep
 
-pub fn spawn(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        // Tiny grace period at boot so we don't compete with the rest
-        // of setup (DB migrations, cloud status hydrate, etc.).
-        tokio::time::sleep(Duration::from_secs(30)).await;
-        run_loop(app).await;
-    });
+pub fn spawn(_app: AppHandle) {
+    // LOCAL FORK: telemetry disabled. Scheduler is a no-op so no
+    // heartbeat ever leaves the device. Counters in `counters.rs`
+    // remain wired up (every `bump()` call site is untouched) so the
+    // upstream diff stays minimal and future merges are clean — they
+    // just accumulate in memory and are never drained or sent.
+    let _ = run_loop; // suppress dead-code warning without touching the fn
 }
 
 async fn run_loop(app: AppHandle) {
