@@ -125,6 +125,11 @@ export async function disconnectConnection(connId: string) {
     for (const k of [...n.keys()]) if (k.startsWith(prefix)) n.delete(k);
     return n;
   });
+  defaultSchemas.update((m) => {
+    const n = new Map(m);
+    for (const k of [...n.keys()]) if (k.startsWith(prefix)) n.delete(k);
+    return n;
+  });
 }
 
 // --- Tab state ---------------------------------------------------------------
@@ -260,9 +265,14 @@ export async function handleSqlConnectionSave(config: SqlConnectionConfig) {
     // store-level caches so the UI doesn't show stale databases/tables, and
     // notify components with local caches to invalidate via the version bump.
     connectionDatabases.update((m) => { const n = new Map(m); n.delete(editing.id); return n; });
+    const prefix = `${editing.id}:`;
     databaseTables.update((m) => {
       const n = new Map(m);
-      const prefix = `${editing.id}:`;
+      for (const k of [...n.keys()]) if (k.startsWith(prefix)) n.delete(k);
+      return n;
+    });
+    defaultSchemas.update((m) => {
+      const n = new Map(m);
       for (const k of [...n.keys()]) if (k.startsWith(prefix)) n.delete(k);
       return n;
     });

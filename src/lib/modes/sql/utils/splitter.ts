@@ -192,8 +192,14 @@ export function splitSqlStatementsWithPositions(sql: string): PositionedStatemen
   let regionStart = 0;
   let i = 0;
   const len = sql.length;
+  // MySQL DELIMITER state. Same semantics as `splitSqlStatements` —
+  // without this, cursor-aware execute inside a CREATE TRIGGER /
+  // CREATE PROCEDURE block would select an inner fragment ending at
+  // the body's first `;` instead of the full routine.
+  let delim = ';';
+  let atLineStart = true;
 
-  const emit = (regionEnd: number, hadSemi: boolean) => {
+  const emit = (regionEnd: number, hadTerminator: boolean, terminatorLen: number) => {
     const raw = sql.slice(regionStart, regionEnd);
     let leading = 0;
     while (leading < raw.length && /\s/.test(raw[leading])) leading++;
@@ -203,7 +209,11 @@ export function splitSqlStatementsWithPositions(sql: string): PositionedStatemen
       out.push({
         text: raw.slice(leading, trailing),
         from: regionStart + leading,
-        to: hadSemi ? regionEnd : regionStart + trailing - 1,
+        // `to` points at the last char of the trailing delimiter for
+        // multi-char delimiters (so cursor-at-end-of-delim still maps
+        // to this statement), or at the last non-whitespace char when
+        // there's no terminator.
+        to: hadTerminator ? regionEnd + terminatorLen - 1 : regionStart + trailing - 1,
       });
     }
   };
@@ -211,6 +221,27 @@ export function splitSqlStatementsWithPositions(sql: string): PositionedStatemen
   while (i < len) {
     const ch = sql[i];
     const next = i + 1 < len ? sql[i + 1] : '';
+
+    // DELIMITER directive at line start (MySQL CLI semantics).
+    if (atLineStart && (ch === 'D' || ch === 'd')) {
+      const eolPeek = sql.indexOf('\n', i);
+      const lineSlice = sql.slice(i, eolPeek === -1 ? len : eolPeek);
+      const m = lineSlice.match(/^\s*DELIMITER\s+(\S+)\s*$/i);
+      if (m) {
+        // Emit anything accumulated as a no-terminator statement so its
+        // position bounds still close cleanly.
+        emit(i, false, 0);
+        delim = m[1];
+        i = eolPeek === -1 ? len : eolPeek + 1;
+        regionStart = i;
+        atLineStart = true;
+        continue;
+      }
+    }
+    if (ch !== ' ' && ch !== '\t' && ch !== '\n' && ch !== '\r') {
+      atLineStart = false;
+    }
+    if (ch === '\n') atLineStart = true;
 
     if (ch === '-' && next === '-') {
       const eol = sql.indexOf('\n', i);
@@ -262,15 +293,17 @@ export function splitSqlStatementsWithPositions(sql: string): PositionedStatemen
       i++;
       continue;
     }
-    if (ch === ';') {
-      emit(i, true);
-      i++;
+    // Active statement terminator. Single-char `;` is the common case;
+    // multi-char delimiters from `DELIMITER //` are matched by prefix.
+    if (delim.length === 1 ? ch === delim : sql.startsWith(delim, i)) {
+      emit(i, true, delim.length);
+      i += delim.length;
       regionStart = i;
       continue;
     }
     i++;
   }
 
-  emit(len, false);
+  emit(len, false, 0);
   return out;
 }

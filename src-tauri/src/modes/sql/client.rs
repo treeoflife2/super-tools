@@ -1303,14 +1303,21 @@ pub async fn sql_current_schema(
 ) -> Result<Option<String>, String> {
     ensure_pool_inner(manager.inner(), app_pool.inner(), &conn_id, &database).await?;
     let key = pool_key(&conn_id, &database);
-    let connections = manager.connections.lock().await;
-    let pool = connections
-        .get(&key)
-        .ok_or_else(|| "Connection not found".to_string())?;
+    // Clone the pool inside the lock scope and drop the lock before
+    // awaiting any DB roundtrip. Holding the shared connections mutex
+    // across `fetch_one(...).await` would serialise unrelated pool
+    // operations on the same manager for the duration of the query.
+    let pool = {
+        let connections = manager.connections.lock().await;
+        connections
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| "Connection not found".to_string())?
+    };
     match pool {
         DatabasePool::Postgres(p) => {
             let row: (Option<String>,) = sqlx::query_as("SELECT current_schema()::text")
-                .fetch_one(p)
+                .fetch_one(&p)
                 .await
                 .map_err(|e| e.to_string())?;
             Ok(row.0)
@@ -1536,9 +1543,14 @@ async fn run_batch_clickhouse(
                 });
             }
             Err(e) => {
+                let persisted = if idx == 0 {
+                    "no prior statements were persisted".to_string()
+                } else {
+                    format!("statements 1..{} are already persisted", idx)
+                };
                 return Err(format!(
-                    "Statement {} of {} failed — ClickHouse has no rollback, statements 1..{} are already persisted: {}",
-                    idx + 1, statements.len(), idx, e
+                    "Statement {} of {} failed — ClickHouse has no rollback, {}: {}",
+                    idx + 1, statements.len(), persisted, e
                 ));
             }
         }
@@ -1566,9 +1578,14 @@ async fn run_batch_d1(
                 });
             }
             Err(e) => {
+                let persisted = if idx == 0 {
+                    "no prior statements were persisted".to_string()
+                } else {
+                    format!("statements 1..{} are already persisted", idx)
+                };
                 return Err(format!(
-                    "Statement {} of {} failed — D1 has no rollback, statements 1..{} are already persisted: {}",
-                    idx + 1, statements.len(), idx, e
+                    "Statement {} of {} failed — D1 has no rollback, {}: {}",
+                    idx + 1, statements.len(), persisted, e
                 ));
             }
         }

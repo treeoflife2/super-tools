@@ -123,6 +123,11 @@
     const key = `${b.connectionId}:${b.database}`;
     if (key === columnMapKey) return;
     columnMapKey = key;
+    // Snapshot the key at fetch start. If the user switches bindings
+    // before this batch settles, we must NOT clobber the newer columnMap
+    // or prematurely clear isSchemaLoading — the newer effect run owns
+    // both pieces of state from the moment columnMapKey changed.
+    const requestKey = key;
 
     const fetchColumns = async () => {
       isSchemaLoading = true;
@@ -141,6 +146,8 @@
           return { key: cmKey, cols: cols.map((c: ColumnInfo) => c.name) };
         }),
       );
+      // Bail if a newer fetch claimed columnMapKey while we were awaiting.
+      if (columnMapKey !== requestKey) return;
       for (let i = 0; i < results.length; i++) {
         const r = results[i];
         if (r.status === 'fulfilled') {
@@ -385,22 +392,33 @@
   /** After a successful execution, if any of the statements were DDL
    *  (CREATE / DROP / ALTER / RENAME / TRUNCATE), invalidate the table
    *  cache so the next autocomplete reconfigure sees the new schema.
-   *  Cheap to call — no-ops when no DDL ran. */
-  async function refreshSchemaIfDdl(items: (SqlQueryResult | null | undefined)[]) {
-    if (!binding) return;
+   *  Cheap to call — no-ops when no DDL ran.
+   *
+   *  `target` MUST be the binding that was active when the query started
+   *  — not the reactive `binding`. Reading `binding` here would invalidate
+   *  the wrong tab's cache if the user switched tabs while the query was
+   *  awaiting on the server. Callers snapshot via `const execBinding =
+   *  binding` before the first await and pass that snapshot through. */
+  async function refreshSchemaIfDdl(
+    target: Binding,
+    items: (SqlQueryResult | null | undefined)[],
+  ) {
     const hasDdl = items.some((r) => r && r.queryKind === 'ddl');
     if (!hasDdl) return;
-    const cacheKey = `${binding.connectionId}:${binding.database}`;
+    const cacheKey = `${target.connectionId}:${target.database}`;
     databaseTables.update((m) => {
       const n = new Map(m);
       n.delete(cacheKey);
       return n;
     });
-    // Force the column-fetch effect to re-run on next render by
-    // clearing both the cached map and the dedupe key.
-    columnMap = {};
-    columnMapKey = '';
-    await loadTablesForDb(binding.connectionId, binding.database);
+    // Only clobber the local columnMap if it still belongs to the
+    // executed binding — otherwise the user has already moved on and
+    // we'd be wiping the new tab's autocomplete data.
+    if (columnMapKey === cacheKey) {
+      columnMap = {};
+      columnMapKey = '';
+    }
+    await loadTablesForDb(target.connectionId, target.database);
   }
 
   function makeResultLabel(query: string): string {
@@ -425,11 +443,17 @@
     }
     if (currentTabData?.inFlight) return; // structurally blocked, defensive
 
+    // Snapshot the binding before any await. Reactive `binding` can
+    // change mid-execute if the user switches tabs; we need to point
+    // results, schema invalidation, and the cancel handle at the
+    // binding that *started* the query.
+    const execBinding: Binding = binding;
+
     // Always re-check the pool before executing. ensureConnected is a
     // no-op when already connected. If the user clicks Run during the
     // connect handshake, this awaits the same in-flight Promise.
     try {
-      await ensureConnected(binding.connectionId, binding.database);
+      await ensureConnected(execBinding.connectionId, execBinding.database);
     } catch (e: any) {
       showToast(`Couldn't connect: ${friendlyError(e)}`, 'error');
       return;
@@ -449,8 +473,8 @@
 
     try {
       const result = await sqlExecuteQuery(
-        binding.connectionId,
-        binding.database,
+        execBinding.connectionId,
+        execBinding.database,
         applyRowLimit(rewriteMetaCommand(q)),
         queryId,
       );
@@ -472,7 +496,7 @@
         inFlight: null,
       });
       showToast(`Query completed in ${result.durationMs}ms`, 'success');
-      void refreshSchemaIfDdl([result]);
+      void refreshSchemaIfDdl(execBinding, [result]);
     } catch (e: any) {
       const msg = e?.toString?.() ?? String(e);
       const entry: SqlResultEntry = { label, query: q, result: null, error: msg, startedAt };
@@ -503,8 +527,11 @@
     }
     if (currentTabData?.inFlight) return;
 
+    // Snapshot binding before any await — see refreshSchemaIfDdl docs.
+    const execBinding: Binding = binding;
+
     try {
-      await ensureConnected(binding.connectionId, binding.database);
+      await ensureConnected(execBinding.connectionId, execBinding.database);
     } catch (e: any) {
       showToast(`Couldn't connect: ${friendlyError(e)}`, 'error');
       return;
@@ -545,7 +572,7 @@
     let results: SqlQueryResult[] = [];
     let batchError: string | null = null;
     try {
-      results = await sqlExecuteBatch(binding.connectionId, binding.database, prepared);
+      results = await sqlExecuteBatch(execBinding.connectionId, execBinding.database, prepared);
     } catch (e: any) {
       batchError = e?.toString?.() ?? String(e);
     }
@@ -601,7 +628,7 @@
         : `${queries.length} statements completed`,
       'success',
     );
-    void refreshSchemaIfDdl(results);
+    void refreshSchemaIfDdl(execBinding, results);
   }
 
   async function handleCancel() {

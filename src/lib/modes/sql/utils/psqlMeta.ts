@@ -116,14 +116,20 @@ function translateSqlite(cmd: string, args: string): string | null {
               WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'
               ORDER BY name`;
     case 'schema': {
-      if (!a) {
-        return `SELECT name, sql FROM sqlite_master
-                WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'
-                ORDER BY name`;
-      }
-      // .schema users → PRAGMA table_info(users), prettied up
-      return `SELECT name AS column, type, "notnull" AS not_null, dflt_value AS default_value, pk
-              FROM pragma_table_info('${escapeLit(a)}')`;
+      // Match the sqlite shell: `.schema` returns the CREATE DDL for
+      // every user object (tables, views, indexes, triggers), and
+      // `.schema NAME` filters by name (`*` and `%` become LIKE
+      // wildcards). The arg branch USED to call pragma_table_info,
+      // which returns a column listing — not what the shell does and
+      // not what users expect. Both branches now read DDL from
+      // sqlite_master; rows with NULL sql (the implicit rowid index
+      // sqlite auto-creates) are filtered out.
+      const where = a
+        ? `name ${a.includes('*') || a.includes('%') ? 'LIKE' : '='} '${escapeLit(a.replace(/\*/g, '%'))}'`
+        : `name NOT LIKE 'sqlite_%'`;
+      return `SELECT type, name, tbl_name, sql FROM sqlite_master
+              WHERE ${where} AND sql IS NOT NULL
+              ORDER BY type, name`;
     }
     case 'databases':
       return `PRAGMA database_list`;
