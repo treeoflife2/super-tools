@@ -11,6 +11,11 @@ export function attachSshTerminal(tabKey: string, slot: HTMLElement): void {
   const entry = get(sshTerminalMap).get(tabKey);
   if (!entry) return;
   slot.appendChild(entry.container);
+  // Canvas tiles always show the terminal. SshPanel may have added
+  // `term-hidden` (opacity:0) to inactive profiles — strip it here so the
+  // canvas tile renders. When detached and the user returns to SSH mode,
+  // SshPanel.activateProfile will re-apply it for inactive profiles.
+  entry.container.classList.remove('term-hidden');
   try {
     entry.fitAddon.fit();
   } catch {

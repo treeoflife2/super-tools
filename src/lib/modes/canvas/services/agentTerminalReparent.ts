@@ -14,6 +14,12 @@ export function attachAgentTerminal(sessionId: string, slot: HTMLElement): void 
   const entry = get(agentTerminalMap).get(sessionId);
   if (!entry) return;
   slot.appendChild(entry.container);
+  // Canvas tiles always show the terminal. AgentPanel's selectSession may
+  // have added `agent-term-hidden` (display:none) to inactive sessions —
+  // strip it here so the canvas tile renders. When detached and the user
+  // returns to Agent mode, AgentPanel.showTermEntry will re-apply it for
+  // inactive sessions.
+  entry.container.classList.remove('agent-term-hidden');
   // Lazy term.open: xterm's `terminal.element` is set after the first
   // `open(container)` call. For sessions that were created but never
   // mounted (Canvas-only view of an inactive Agent session), term.element
