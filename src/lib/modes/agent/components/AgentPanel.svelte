@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
   import { get } from 'svelte/store';
   import { Terminal } from '@xterm/xterm';
   import { FitAddon } from '@xterm/addon-fit';
@@ -74,14 +74,20 @@
 
   $effect(() => {
     if ($mode !== 'agent') return;
-    const session = $activeAgentSession;
+    // Read activeAgentSession non-reactively — this $effect should only
+    // re-run when $mode changes (e.g., Canvas → Agent return), NOT when
+    // the active session changes via tab click. Tab click activations go
+    // through the unsubSession subscriber → selectSession → showTermEntry,
+    // which has sole authority over visibility. Adding a parallel call
+    // from this $effect races and corrupts the activeTermEntry pointer.
+    const session = untrack(() => $activeAgentSession);
     if (!session?.id) return;
 
-    // Active session's container may be orphaned (e.g., after a Canvas
-    // round-trip parked it in a canvas tile slot). Put it back in terminalEl
-    // and let showTermEntry handle visibility. We do NOT iterate the entire
-    // map or touch any classes — showTermEntry is the sole authority.
-    const entry = get(agentTerminalMap).get(session.id);
+    // Active session's container may be orphaned after a Canvas round-trip
+    // (CanvasTile.detachAgentTerminal moved it into a canvas tile slot,
+    // then the tile unmounted). Re-home it to terminalEl/shellEl, then let
+    // showTermEntry / showShellEntry apply the correct visibility class.
+    const entry = untrack(() => $agentTerminalMap).get(session.id);
     if (entry && terminalEl) {
       if (entry.container.parentElement !== terminalEl) {
         terminalEl.appendChild(entry.container);
@@ -89,7 +95,7 @@
       showTermEntry(entry);
     }
 
-    const shellEntry = get(agentShellMap).get(session.id);
+    const shellEntry = untrack(() => $agentShellMap).get(session.id);
     if (shellEntry && shellEl) {
       if (shellEntry.container.parentElement !== shellEl) {
         shellEl.appendChild(shellEntry.container);
