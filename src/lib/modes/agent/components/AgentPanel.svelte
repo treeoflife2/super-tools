@@ -435,7 +435,8 @@
     t.loadAddon(sa);
 
     const container = document.createElement('div');
-    container.style.cssText = 'width:100%;height:100%;display:none;';
+    container.style.cssText = 'width:100%;height:100%;';
+    container.classList.add('agent-term-hidden');
     terminalEl.appendChild(container);
     t.open(container);
     loadWebGLAddon(t);
@@ -508,11 +509,11 @@
 
   function showTermEntry(entry: { term: Terminal; fitAddon: FitAddon; searchAddon: SearchAddon; container: HTMLDivElement; terminalId: string | null }) {
     if (activeTermEntry && activeTermEntry !== entry) {
-      activeTermEntry.container.style.display = 'none';
+      activeTermEntry.container.classList.add('agent-term-hidden');
       try { activeTermEntry.term.options.scrollback = 1000; } catch (_) {}
       if (termFindOpen) try { activeTermEntry.searchAddon.clearDecorations(); } catch { /* ignore */ }
     }
-    entry.container.style.display = 'block';
+    entry.container.classList.remove('agent-term-hidden');
     try { entry.term.options.scrollback = 10000; } catch (_) {}
     activeTermEntry = entry;
     requestAnimationFrame(() => {
@@ -553,7 +554,8 @@
     t.loadAddon(sa);
 
     const container = document.createElement('div');
-    container.style.cssText = 'width:100%;height:100%;display:none;';
+    container.style.cssText = 'width:100%;height:100%;';
+    container.classList.add('agent-term-hidden');
     shellEl.appendChild(container);
     t.open(container);
     loadWebGLAddon(t);
@@ -619,11 +621,11 @@
 
   function showShellEntry(sEntry: { term: Terminal; fitAddon: FitAddon; searchAddon: SearchAddon; container: HTMLDivElement; terminalId: string | null }) {
     if (activeShellEntry && activeShellEntry !== sEntry) {
-      activeShellEntry.container.style.display = 'none';
+      activeShellEntry.container.classList.add('agent-term-hidden');
       try { activeShellEntry.term.options.scrollback = 500; } catch (_) {}
       if (shellFindOpen) try { activeShellEntry.searchAddon.clearDecorations(); } catch { /* ignore */ }
     }
-    sEntry.container.style.display = 'block';
+    sEntry.container.classList.remove('agent-term-hidden');
     try { sEntry.term.options.scrollback = 5000; } catch (_) {}
     activeShellEntry = sEntry;
     requestAnimationFrame(() => {
@@ -1312,11 +1314,11 @@
     } else if (!session) {
       currentSessionId = null;
       if (activeTermEntry) {
-        activeTermEntry.container.style.display = 'none';
+        activeTermEntry.container.classList.add('agent-term-hidden');
         activeTermEntry = null;
       }
       if (activeShellEntry) {
-        activeShellEntry.container.style.display = 'none';
+        activeShellEntry.container.classList.add('agent-term-hidden');
         activeShellEntry = null;
       }
       // Clear git state and usage polling when no session
@@ -1343,7 +1345,7 @@
       });
     } else {
       if (activeShellEntry) {
-        activeShellEntry.container.style.display = 'none';
+        activeShellEntry.container.classList.add('agent-term-hidden');
         activeShellEntry = null;
       }
       refitAll();
@@ -1985,6 +1987,17 @@
   .agent-shell-container.term-hidden {
     opacity: 0;
   }
+
+  /* Keep inactive xterm containers in the render tree so WebKit preserves their
+     WebGL contexts. display:none evicts GPU textures permanently in WebKit. */
+  .agent-term-hidden {
+    visibility: hidden !important;
+    position: absolute !important;
+    left: -99999px !important;
+    top: 0 !important;
+    pointer-events: none !important;
+  }
+
   .shell-loading {
     /* same .agent-loading positioning, just scoped here */
   }
