@@ -72,52 +72,49 @@
   let shellEl: HTMLDivElement;
   let wrapperEl: HTMLDivElement;
 
-  // Reparent guard: if the mode becomes 'agent' and session containers have
-  // been moved elsewhere (e.g., into a Canvas tile), pull ALL of them back
-  // into their canonical parents. Every agent-terminal container lives in
-  // terminalEl; every shell container lives in shellEl. Inactive containers
-  // get the .agent-term-hidden class so they remain in the WebKit render
-  // tree (preserving WebGL contexts) while hidden offscreen. This is the
-  // canonical home — after a Canvas round-trip, orphaned containers are
-  // re-homed here so tab-switching works correctly for ALL sessions, not
-  // just the currently-active one.
+  // Reparent guard: after a Canvas round-trip, CanvasTile.detachAgentTerminal
+  // leaves session containers parentless. Re-home them back to their canonical
+  // slots so the existing showTermEntry / showShellEntry flow takes over
+  // visibility management. We do NOT toggle agent-term-hidden here — that
+  // class is owned exclusively by showTermEntry / showShellEntry, which also
+  // maintain the activeTermEntry / activeShellEntry pointers. Dual authority
+  // over the class caused tab-switch races (stale pointer on next switch).
   $effect(() => {
     if ($mode !== 'agent') return;
     const session = $activeAgentSession;
     if (!session?.id) return;
 
-    // (1) Re-home every agent terminal container to terminalEl with the
-    //     correct visibility class.
+    // Re-home any orphaned session containers back to their canonical slot.
+    // After a Canvas round-trip, CanvasTile.detachAgentTerminal leaves
+    // containers parentless. Putting them back here lets the existing
+    // showTermEntry / showShellEntry flow take over visibility management.
+    // We do NOT toggle the `agent-term-hidden` class here — that's owned
+    // by showTermEntry / showShellEntry which also maintain activeTermEntry
+    // and activeShellEntry pointers. Dual authority caused tab-switch races.
     if (terminalEl) {
-      const activeId = session.id;
-      for (const [sid, sentry] of get(agentTerminalMap)) {
+      for (const [, sentry] of get(agentTerminalMap)) {
         const c = sentry?.container;
-        if (!c) continue;
-        if (c.parentElement !== terminalEl) terminalEl.appendChild(c);
-        if (sid === activeId) c.classList.remove('agent-term-hidden');
-        else c.classList.add('agent-term-hidden');
+        if (c && c.parentElement !== terminalEl) {
+          terminalEl.appendChild(c);
+        }
       }
     }
-
-    // (2) Same for shells.
     if (shellEl) {
-      const activeId = session.id;
-      for (const [sid, sentry] of get(agentShellMap)) {
+      for (const [, sentry] of get(agentShellMap)) {
         const c = sentry?.container;
-        if (!c) continue;
-        if (c.parentElement !== shellEl) shellEl.appendChild(c);
-        if (sid === activeId) c.classList.remove('agent-term-hidden');
-        else c.classList.add('agent-term-hidden');
+        if (c && c.parentElement !== shellEl) {
+          shellEl.appendChild(c);
+        }
       }
     }
 
-    // (3) Fit the active terminal + shell so dimensions are correct after
-    //     a potential Canvas round-trip. ResizeObserver handles subsequent
-    //     layout changes.
+    // Refresh activeTermEntry / activeShellEntry pointers after re-home.
+    // Safe even if showTermEntry was just called via the activeAgentSession
+    // subscriber — it's idempotent for the same entry.
     const activeEntry = get(agentTerminalMap).get(session.id);
-    try { activeEntry?.fitAddon?.fit(); } catch { /* Layout not ready yet; ResizeObserver will fit shortly. */ }
+    if (activeEntry) showTermEntry(activeEntry);
     const activeShellEntry = get(agentShellMap).get(session.id);
-    try { activeShellEntry?.fitAddon?.fit(); } catch { /* Layout not ready yet; ResizeObserver will fit shortly. */ }
+    if (activeShellEntry) showShellEntry(activeShellEntry);
   });
 
   // Active terminal entry refs
