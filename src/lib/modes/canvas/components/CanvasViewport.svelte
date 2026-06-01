@@ -1,6 +1,7 @@
 <script lang="ts">
   import CanvasGrid from './CanvasGrid.svelte';
   import CanvasWorld from './CanvasWorld.svelte';
+  import CanvasOverlay from './CanvasOverlay.svelte';
   import CanvasToolbar from './CanvasToolbar.svelte';
   import { pannable } from '$lib/modes/canvas/actions/pannable';
   import { zoomable } from '$lib/modes/canvas/actions/zoomable';
@@ -15,6 +16,7 @@
 >
   <CanvasGrid />
   <CanvasWorld />
+  <CanvasOverlay />
   <CanvasToolbar />
 </div>
 
