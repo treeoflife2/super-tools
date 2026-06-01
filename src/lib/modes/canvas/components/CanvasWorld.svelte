@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { viewport, tilesSortedByZ } from '$lib/modes/canvas/stores/canvasStore';
+  import { mode } from '$lib/stores/app';
   import CanvasTile from './CanvasTile.svelte';
 
   let worldEl: HTMLDivElement | undefined = $state();
@@ -18,9 +19,11 @@
 </script>
 
 <div bind:this={worldEl} class="cv-world">
-  {#each $tilesSortedByZ as tile (tile.tabId)}
-    <CanvasTile {tile} />
-  {/each}
+  {#if $mode === 'canvas'}
+    {#each $tilesSortedByZ as tile (tile.tabId)}
+      <CanvasTile {tile} />
+    {/each}
+  {/if}
 </div>
 
 <style>
