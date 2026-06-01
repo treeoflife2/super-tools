@@ -546,6 +546,15 @@ pub fn run() {
             modes::workspace::commands::workspace_mcp_new_token,
             modes::workspace::commands::workspace_scan_project_issues,
             modes::workspace::commands::workspace_scan_project_issues_by_url,
+
+            // Canvas mode
+            modes::canvas::commands::canvas_resolve_tiles,
+            modes::canvas::commands::canvas_list_tiles,
+            modes::canvas::commands::canvas_upsert_tiles_batch,
+            modes::canvas::commands::canvas_minimize_tile,
+            modes::canvas::commands::canvas_delete_tile,
+            modes::canvas::commands::canvas_get_viewport,
+            modes::canvas::commands::canvas_set_viewport,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
