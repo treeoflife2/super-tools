@@ -12,11 +12,15 @@
   import { canvasAdapterRegistry } from '$lib/modes/canvas/adapter-registry';
   import { agentTerminalAdapter } from '$lib/modes/agent/canvas-adapter';
   import { sshTerminalAdapter } from '$lib/modes/ssh/canvas-adapter';
-  import { shellTerminalAdapter } from '$lib/modes/canvas/adapters/shellTerminalAdapter';
+  import {
+    shellTerminalAdapter,
+    performShellClose,
+  } from '$lib/modes/canvas/adapters/shellTerminalAdapter';
   import { loadCanvasSettings } from '$lib/modes/canvas/stores/canvasSettingsStore';
   import { canvasEnabled } from '$lib/modes/canvas/stores/canvasEnabled';
   import CanvasViewport from './CanvasViewport.svelte';
   import CanvasIntro from './CanvasIntro.svelte';
+  import ConfirmDialog from '$lib/shared/primitives/ConfirmDialog.svelte';
 
   // Phase 2 stub: hardcoded workspace id so the surface mounts. Phase 4
   // wires this to the real active-workspace store.
@@ -26,6 +30,22 @@
   let unsubscribes: Array<() => void> = [];
   let adapterUnsubscribes: Array<() => void> = [];
   let initialized = false;
+
+  let showShellCloseConfirm = $state(false);
+  let shellCloseTargetId = $state<string | null>(null);
+
+  async function confirmShellClose() {
+    if (shellCloseTargetId !== null) {
+      await performShellClose(shellCloseTargetId);
+    }
+    shellCloseTargetId = null;
+    showShellCloseConfirm = false;
+  }
+
+  function cancelShellClose() {
+    shellCloseTargetId = null;
+    showShellCloseConfirm = false;
+  }
 
   async function resolveTilesNow() {
     if (resolveTimer) {
@@ -104,6 +124,18 @@
       }
     });
     unsubscribes.push(unsub);
+
+    const onShellCloseRequest = (e: Event) => {
+      const tabId = (e as CustomEvent<{ tabId: string }>).detail?.tabId;
+      if (typeof tabId !== 'string') return;
+      shellCloseTargetId = tabId;
+      showShellCloseConfirm = true;
+    };
+    window.addEventListener('canvas:request-shell-close', onShellCloseRequest);
+
+    return () => {
+      window.removeEventListener('canvas:request-shell-close', onShellCloseRequest);
+    };
   });
 
   onDestroy(() => {
@@ -120,6 +152,15 @@
     <CanvasIntro />
   {/if}
 </div>
+
+<ConfirmDialog
+  bind:show={showShellCloseConfirm}
+  title="Close terminal?"
+  message="The session will be terminated."
+  confirmText="Close"
+  onconfirm={confirmShellClose}
+  oncancel={cancelShellClose}
+/>
 
 <style>
   .cv-panel {
