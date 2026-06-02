@@ -32,9 +32,12 @@ export const agentTerminalAdapter: CanvasTabAdapter = {
   getMeta(tabId) {
     const sessions = get(agentSessions);
     const s = sessions.find((x) => x.id === tabId);
-    return {
-      title: s?.title ?? tabId,
-    };
+    if (!s) return { title: tabId };
+    // Atlas has more space than the topbar tab strip — show purpose alongside
+    // the session title (e.g., "docs — PR Review") so multiple sessions for
+    // the same project are distinguishable at a glance.
+    const title = s.purpose ? `${s.title} — ${s.purpose}` : s.title;
+    return { title };
   },
 
   openInHomeMode(tabId) {

@@ -24,6 +24,10 @@ export function draggable(node: HTMLElement, params: DraggableParams) {
 
   function onPointerDown(e: PointerEvent) {
     if (e.button !== 0) return; // only left-button drags tiles
+    // Don't start a drag if the user clicked a button (e.g., the tile's
+    // close X). Buttons inside the title bar own their own click events.
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button')) return;
     const tile = get(tilesByTab).get(tabId);
     if (!tile) return;
     e.stopPropagation();

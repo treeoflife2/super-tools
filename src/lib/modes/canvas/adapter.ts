@@ -40,4 +40,7 @@ export interface CanvasTabAdapter {
 
   /** Double-click on title bar → switch to source mode, activate this tab. */
   openInHomeMode(tabId: string): void;
+
+  /** Close the tab — honor source mode's confirm flow if any. */
+  closeTab?(tabId: string): void | Promise<void>;
 }

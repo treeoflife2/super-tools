@@ -11,6 +11,11 @@
   function onDoubleClick() {
     adapter?.openInHomeMode(tile.tabId);
   }
+
+  function onClose(e: MouseEvent) {
+    e.stopPropagation();
+    void adapter?.closeTab?.(tile.tabId);
+  }
 </script>
 
 <div
@@ -22,6 +27,12 @@
     <span class="cv-tile-dot" style="background: {meta.statusDot};"></span>
   {/if}
   <span class="cv-tile-title">{meta.title}{meta.dirty ? ' •' : ''}</span>
+  <button class="cv-tile-close" onclick={onClose} title="Close" aria-label="Close tile">
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <line x1="2" y1="2" x2="12" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="12" y1="2" x2="2" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>
+  </button>
 </div>
 
 <style>
@@ -49,8 +60,29 @@
     flex-shrink: 0;
   }
   .cv-tile-title {
+    flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .cv-tile-close {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    margin-left: 4px;
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    color: var(--t3);
+    cursor: pointer;
+    line-height: 1;
+  }
+  .cv-tile-close:hover {
+    color: var(--t1);
+    background: var(--surface-hover);
   }
 </style>
