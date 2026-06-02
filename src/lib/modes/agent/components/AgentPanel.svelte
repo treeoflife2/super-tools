@@ -421,7 +421,6 @@
 
     const container = document.createElement('div');
     container.style.cssText = 'width:100%;height:100%;';
-    container.classList.add('agent-term-hidden');
     terminalEl.appendChild(container);
     t.open(container);
     loadWebGLAddon(t);
@@ -541,7 +540,6 @@
 
     const container = document.createElement('div');
     container.style.cssText = 'width:100%;height:100%;';
-    container.classList.add('agent-term-hidden');
     shellEl.appendChild(container);
     t.open(container);
     loadWebGLAddon(t);
