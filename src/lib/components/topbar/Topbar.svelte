@@ -546,7 +546,7 @@
     {#each filteredTabs as tab (tab.id)}
       <button
         class="tab"
-        class:on={$activeTabId === tab.id}
+        class:on={$activeTabId === tab.id && tab.mode === $mode}
         class:tab-dirty={tab.mode === 'rest' && (tab.dirty || tab.unsaved)}
         onclick={() => handleTabClick(tab.id)}
         oncontextmenu={(e: MouseEvent) => handleTabContextMenu(e, tab)}

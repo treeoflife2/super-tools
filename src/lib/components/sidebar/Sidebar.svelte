@@ -68,7 +68,11 @@
     }
     if (m !== 'history') previousMode = m;
     void appSetMode(m);
-    navOpen.set(true);
+    if (m === 'canvas') {
+      navOpen.set(false);
+    } else {
+      navOpen.set(true);
+    }
     realignActiveTabToMode(m);
   }
 

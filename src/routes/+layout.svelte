@@ -1236,7 +1236,9 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="app-shell" onmousedown={handleGlobalMousedown}>
     <Sidebar />
-    <NavPanel />
+    {#if $mode !== 'canvas'}
+        <NavPanel />
+    {/if}
     <div class="app-content">
         <Topbar />
         <div class="app-workspace">
@@ -1244,7 +1246,9 @@
         </div>
         <StatusBar />
     </div>
-    <AIPanel />
+    {#if $mode !== 'canvas'}
+        <AIPanel />
+    {/if}
 </div>
 
 <!-- Premium theme decorations — each renders nothing for non-matching themes. -->

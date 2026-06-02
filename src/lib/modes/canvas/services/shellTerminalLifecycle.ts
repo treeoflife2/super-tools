@@ -14,6 +14,19 @@ import { agentWriteToTerminal } from '$lib/modes/agent/commands';
 import { getTerminalTheme } from '$lib/utils/theme';
 import { appearance } from '$lib/stores/settings';
 
+// Live theme update — when the user switches theme/accent, re-apply
+// the terminal theme to every existing shell xterm. Mirrors Agent
+// mode's pattern (AgentPanel.svelte ~line 1263).
+appearance.subscribe((app) => {
+  if (!app) return;
+  const termTheme = getTerminalTheme(app.theme, app.accentColor);
+  const map = get(shellTerminals);
+  for (const entry of map.values()) {
+    const t = entry.internal?.term;
+    if (t) t.options.theme = termTheme;
+  }
+});
+
 /**
  * Spawn a new Canvas shell terminal. Adds a placeholder entry to the store
  * synchronously, then awaits the PTY spawn. xterm DOM creation is deferred
