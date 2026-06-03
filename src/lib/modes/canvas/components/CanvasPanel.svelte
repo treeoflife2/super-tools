@@ -8,7 +8,7 @@
     setActiveWorkspace,
     viewport,
   } from '$lib/modes/canvas/stores/canvasStore';
-  import { canvasGetViewport } from '$lib/modes/canvas/commands';
+  import { canvasGetViewport, type TabRef } from '$lib/modes/canvas/commands';
   import { canvasAdapterRegistry } from '$lib/modes/canvas/adapter-registry';
   import { agentTerminalAdapter } from '$lib/modes/agent/canvas-adapter';
   import { sshTerminalAdapter } from '$lib/modes/ssh/canvas-adapter';
@@ -51,16 +51,19 @@
       clearTimeout(resolveTimer);
       resolveTimer = null;
     }
-    const agentTabs = agentTerminalAdapter
-      .listOpenTabs(ACTIVE_WORKSPACE_ID)
-      .map((t) => ({ tabKind: 'agent_terminal' as const, tabId: t.id }));
-    const sshTabs = sshTerminalAdapter
-      .listOpenTabs(ACTIVE_WORKSPACE_ID)
-      .map((t) => ({ tabKind: 'ssh_terminal' as const, tabId: t.id }));
-    const shellTabs = shellTerminalAdapter
-      .listOpenTabs(ACTIVE_WORKSPACE_ID)
-      .map((t) => ({ tabKind: 'shell_terminal' as const, tabId: t.id }));
-    await loadCanvas(ACTIVE_WORKSPACE_ID, [...agentTabs, ...sshTabs, ...shellTabs]);
+    const refs: TabRef[] = [];
+    for (const adapter of canvasAdapterRegistry.list()) {
+      const size = adapter.defaultSpawnSize;
+      for (const t of adapter.listOpenTabs(ACTIVE_WORKSPACE_ID)) {
+        refs.push({
+          tabKind: adapter.tabKind,
+          tabId: t.id,
+          defaultWidth: size?.width,
+          defaultHeight: size?.height,
+        });
+      }
+    }
+    await loadCanvas(ACTIVE_WORKSPACE_ID, refs);
   }
 
   function scheduleResolve() {

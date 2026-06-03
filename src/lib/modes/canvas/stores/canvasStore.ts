@@ -116,3 +116,32 @@ export async function flushDirtyTilesNow(): Promise<void> {
 export const tilesSortedByZ = derived(tilesByTab, ($map) =>
   [...$map.values()].sort((a, b) => a.zOrder - b.zOrder),
 );
+
+/**
+ * Maps a focused tile's TabKind back to its source mode (the value of $mode
+ * when the user navigates to that tab's home). Used by future AI panel /
+ * hotkey routing on canvas; safe to consume now even though plumbing is
+ * still hidden behind v2 polish work.
+ */
+const TAB_KIND_TO_MODE: Partial<Record<string, string>> = {
+  agent_terminal: 'agent',
+  ssh_terminal: 'ssh',
+  shell_terminal: 'canvas',
+  sql_editor: 'sql',
+  rest_request: 'rest',
+  mongo_query: 'nosql',
+  redis_query: 'nosql',
+  explorer_file_browser: 'explorer',
+  workspace_note: 'workspace',
+  workspace_board: 'workspace',
+};
+
+export const focusedTileMode = derived(
+  [focusedTabId, tilesByTab],
+  ([$id, $map]) => {
+    if (!$id) return null;
+    const tile = $map.get($id);
+    if (!tile) return null;
+    return TAB_KIND_TO_MODE[tile.tabKind] ?? null;
+  },
+);
