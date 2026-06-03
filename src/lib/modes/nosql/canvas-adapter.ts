@@ -122,12 +122,7 @@ export const mongoQueryAdapter: CanvasTabAdapter = {
   },
 
   getMeta(tabId) {
-    const numericId = Number(tabId);
-    const driver = driverOfTab(numericId);
-    if (driver === 'redis') {
-      return metaFor(numericId);
-    }
-    return metaFor(numericId);
+    return metaFor(Number(tabId));
   },
 
   openInHomeMode(tabId) {

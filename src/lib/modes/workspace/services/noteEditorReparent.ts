@@ -25,6 +25,8 @@ interface NoteEditorEntry {
   dirty: boolean;
   /** Pending base64 image uploads, keyed for cancel-on-destroy bookkeeping. */
   uploadPromises: Set<Promise<string>>;
+  /** Live FileReaders for in-flight uploads so destroy can abort them. */
+  uploadReaders: Set<FileReader>;
 }
 
 const registry = new Map<string, NoteEditorEntry>();
@@ -34,16 +36,22 @@ const detachedNoteIds = new Set<string>();
 const SAVE_DEBOUNCE_MS = 600;
 
 function fileToDataUrl(noteId: string, file: File): Promise<string> {
+  const reader = new FileReader();
+  const entry = registry.get(noteId);
+  if (entry) entry.uploadReaders.add(reader);
   const promise = new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
     reader.onerror = () => reject(reader.error ?? new Error('image read failed'));
+    reader.onabort = () => reject(new Error('image read aborted'));
     reader.readAsDataURL(file);
   });
-  const entry = registry.get(noteId);
   if (entry) {
     entry.uploadPromises.add(promise);
-    promise.finally(() => entry.uploadPromises.delete(promise));
+    promise.finally(() => {
+      const live = registry.get(noteId);
+      live?.uploadPromises.delete(promise);
+      live?.uploadReaders.delete(reader);
+    });
   }
   return promise;
 }
@@ -128,6 +136,7 @@ async function createEntry(noteId: string): Promise<NoteEditorEntry> {
     listeners: new Set(),
     dirty: false,
     uploadPromises: new Set(),
+    uploadReaders: new Set(),
   };
   registry.set(noteId, entry);
 
@@ -235,6 +244,14 @@ export async function destroyNoteEditor(noteId: string): Promise<void> {
     entry.container.parentElement.removeChild(entry.container);
   }
   entry.listeners.clear();
+  for (const reader of entry.uploadReaders) {
+    try {
+      reader.abort();
+    } catch {
+      // Reader already in a terminal state; nothing to abort.
+    }
+  }
+  entry.uploadReaders.clear();
   entry.uploadPromises.clear();
 
   try {

@@ -54,7 +54,11 @@ export const explorerFileBrowserAdapter: CanvasTabAdapter = {
     });
     return {
       destroy: () => {
-        void unmount(component);
+        try {
+          void unmount(component);
+        } catch {
+          // Tolerate already-torn-down instances (HMR / double-destroy).
+        }
       },
     };
   },
