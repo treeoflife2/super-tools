@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { mode, navOpen, aiPanelOpen, activeModal } from '$lib/stores/app';
+  import { mode, navOpen, aiPanelOpen, activeModal, setMode as appSetMode } from '$lib/stores/app';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { isMac, isLinux } from '$lib/utils/platform';
   import { cloudConnected, cloudConflicts, syncing, setSyncing, setDisconnected, showSyncRestorePrompt, markSynced } from '$lib/stores/cloud';
@@ -67,8 +67,12 @@
       return;
     }
     if (m !== 'history') previousMode = m;
-    mode.set(m);
-    navOpen.set(true);
+    void appSetMode(m);
+    if (m === 'canvas') {
+      navOpen.set(false);
+    } else {
+      navOpen.set(true);
+    }
     realignActiveTabToMode(m);
   }
 
@@ -100,14 +104,14 @@
 
   function toggleHistory() {
     if ($mode === 'history' && $navOpen) {
-      mode.set(previousMode);
+      void appSetMode(previousMode);
       navOpen.set(false);
       realignActiveTabToMode(previousMode);
       return;
     }
     if ($mode !== 'history') {
       previousMode = $mode as any;
-      mode.set('history');
+      void appSetMode('history');
     }
     navOpen.set(true);
   }
@@ -254,6 +258,11 @@
   <SidebarButton label="Agent" tip="Agent" active={$mode === 'agent'} dotColor="var(--agent, #d2a8ff)" id="sbi-agent" onclick={() => setMode('agent')}>
     <!-- Sparkle — universal AI/agent icon (Claude, Cursor, Notion AI) -->
     <svg viewBox="0 0 24 24"><path d="M12 3l1.6 4.8L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.2L12 3z"/><path d="M18.5 14l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9.9-2.6z"/></svg>
+  </SidebarButton>
+  <!-- Canvas sits with Agent + Workspace as the "meta" group (top); data/protocol modes follow. -->
+  <SidebarButton label="Atlas" tip="Atlas" active={$mode === 'canvas'} id="sbi-canvas" onclick={() => setMode('canvas')}>
+    <!-- Frame corners — spatial canvas / freeform workspace -->
+    <svg viewBox="0 0 24 24"><path d="M2 7V3h4"/><path d="M22 7V3h-4"/><path d="M2 17v4h4"/><path d="M22 17v4h-4"/><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
   </SidebarButton>
   <SidebarButton label="Workspace" tip="Workspaces (Notes & Boards)" active={$mode === 'workspace'} id="sbi-workspace" onclick={() => setMode('workspace')}>
     <!-- 2×2 grid — workspace = a dashboard of mixed items. Distinct

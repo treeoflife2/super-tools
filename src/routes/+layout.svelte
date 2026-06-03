@@ -104,7 +104,7 @@
     } from "$lib/commands/cloud";
     import { listen } from "@tauri-apps/api/event";
     import { cloudConflicts } from "$lib/stores/cloud";
-    import { activeModal, aiPanelOpen, mode } from "$lib/stores/app";
+    import { activeModal, aiPanelOpen, mode, setMode } from "$lib/stores/app";
     import {
         agentSessionKey,
         agentCodexToken,
@@ -263,7 +263,7 @@
                     key,
                     kind === "note" ? "var(--acc)" : "#a78bfa",
                 );
-            mode.set("workspace");
+            void setMode("workspace");
         };
 
         ws.forEach((w, idx) => {
@@ -275,7 +275,7 @@
                 icon: wsIcon,
                 action: () => {
                     activeWorkspaceId.set(w.id);
-                    mode.set("workspace");
+                    void setMode("workspace");
                 },
             });
             const notes = notesMap.get(w.id) ?? [];
@@ -341,7 +341,7 @@
             );
             if (existing) activateTab(existing.id);
             else addTab(note.title, "workspace", key, "var(--acc)");
-            mode.set("workspace");
+            void setMode("workspace");
         } catch (e) {
             showToast(`Failed to create note: ${e}`, "error");
         }
@@ -364,7 +364,7 @@
             );
             if (existing) activateTab(existing.id);
             else addTab(board.name, "workspace", key, "#a78bfa");
-            mode.set("workspace");
+            void setMode("workspace");
         } catch (e) {
             showToast(`Failed to create board: ${e}`, "error");
         }
@@ -1236,7 +1236,9 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="app-shell" onmousedown={handleGlobalMousedown}>
     <Sidebar />
-    <NavPanel />
+    {#if $mode !== 'canvas'}
+        <NavPanel />
+    {/if}
     <div class="app-content">
         <Topbar />
         <div class="app-workspace">
@@ -1244,7 +1246,9 @@
         </div>
         <StatusBar />
     </div>
-    <AIPanel />
+    {#if $mode !== 'canvas'}
+        <AIPanel />
+    {/if}
 </div>
 
 <!-- Premium theme decorations — each renders nothing for non-matching themes. -->

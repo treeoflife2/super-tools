@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { navOpen, aiPanelOpen, aiPanelOpenPerMode, mode } from '$lib/stores/app';
+  import { navOpen, aiPanelOpen, aiPanelOpenPerMode, mode, setMode } from '$lib/stores/app';
   import { tabs, activeTabId, addTab, closeTab, activateTab, getDraft, markClean, clearDraft } from '$lib/shared/stores/tabs';
   import { activeRequestId, loadRequest, clearActiveRequest, commitRequest } from '$lib/modes/rest/stores';
   import { sqlIsConnected, activeConnection, disconnectFromDb, initSqlTab, clearSqlTabData, setSqlTabData, sqlScripts, saveSqlScript, updateSqlScript, deleteSqlScript, getSqlTabData, activeConnectionId, selectedDatabase, connectToDatabase, sqlPendingChanges, connectToDb, connectedIds, connections, loadConnections } from '$lib/modes/sql/stores';
@@ -34,6 +34,7 @@
   // REST save prompt state
   let showCloseConfirm = $state(false);
   let closeConfirmTabId = $state(-1);
+  let closeConfirmKeepMode = $state(false);
 
   /** DOM ref to the scrolling tabs container. Used by the effect below
    *  to auto-scroll a newly-created or newly-activated tab into view
@@ -198,27 +199,34 @@
     // tab took its place. activateTabAcrossMode handles REST loadRequest
     // / Agent activeAgentSession; SSH/SQL/NoSQL/Explorer panels self-heal
     // via their own activeTabId subscribers.
-    const newActiveId = get(activeTabId);
-    if (newActiveId === -1) {
-      clearActiveRequest();
-      return;
+    //
+    // Skip realignment when the close was triggered from Canvas — the
+    // user is already on Canvas and should stay there.
+    if (!closeConfirmKeepMode) {
+      const newActiveId = get(activeTabId);
+      if (newActiveId === -1) {
+        closeConfirmKeepMode = false;
+        clearActiveRequest();
+        return;
+      }
+      const newActive = get(tabs).find(t => t.id === newActiveId);
+      if (newActive && newActive.mode !== get(mode)) {
+        activateTabAcrossMode(newActive.id);
+      } else if (newActive?.mode === 'rest') {
+        // Same-mode REST close: ensure the editor loads the new active
+        // request (closeTab doesn't run side effects on its own).
+        if (newActive.key) loadRequest(newActive.key);
+        else clearActiveRequest();
+      } else if (newActive?.mode === 'agent' && newActive.key) {
+        // Same-mode agent close: switch the active session to the promoted tab.
+        // closeTab only updates the tab bar; activeAgentSession must be set
+        // explicitly or the panel stays blank until the user clicks the tab.
+        const sessions = get(agentSessions);
+        const nextSession = sessions.find(s => s.id === newActive.key);
+        if (nextSession) activeAgentSession.set(nextSession);
+      }
     }
-    const newActive = get(tabs).find(t => t.id === newActiveId);
-    if (newActive && newActive.mode !== get(mode)) {
-      activateTabAcrossMode(newActive.id);
-    } else if (newActive?.mode === 'rest') {
-      // Same-mode REST close: ensure the editor loads the new active
-      // request (closeTab doesn't run side effects on its own).
-      if (newActive.key) loadRequest(newActive.key);
-      else clearActiveRequest();
-    } else if (newActive?.mode === 'agent' && newActive.key) {
-      // Same-mode agent close: switch the active session to the promoted tab.
-      // closeTab only updates the tab bar; activeAgentSession must be set
-      // explicitly or the panel stays blank until the user clicks the tab.
-      const sessions = get(agentSessions);
-      const nextSession = sessions.find(s => s.id === newActive.key);
-      if (nextSession) activeAgentSession.set(nextSession);
-    }
+    closeConfirmKeepMode = false;  // Always reset.
   }
 
   // REST-only save prompt handlers
@@ -379,7 +387,7 @@
     // Create the tab; activeTabId flips inside addTab.
     const tab = addTab(script.name, 'sql', script.id, 'var(--sql)');
     showSqlScriptModal = false;
-    mode.set('sql');
+    await setMode('sql');
 
     // Resolve binding:
     //   - If the script's saved connection still exists, bind to its
@@ -513,13 +521,23 @@
     handleAddTab();
   }
 
+  const onCanvasCloseRequest = (e: Event) => {
+    const tabId = (e as CustomEvent<{ tabId: number }>).detail?.tabId;
+    if (typeof tabId !== 'number') return;
+    closeConfirmKeepMode = true;  // Skip mode realignment — user is on Canvas.
+    const synthetic = new MouseEvent('click');
+    handleTabClose(synthetic, tabId);
+  };
+
   onMount(() => {
     window.addEventListener(APP_EVENT.TAB_CLOSE_PROMPT, handleTabClosePromptEvent);
     window.addEventListener(APP_EVENT.NEW_TAB, handleNewTabShortcut);
+    window.addEventListener('canvas:request-tab-close', onCanvasCloseRequest);
   });
   onDestroy(() => {
     window.removeEventListener(APP_EVENT.TAB_CLOSE_PROMPT, handleTabClosePromptEvent);
     window.removeEventListener(APP_EVENT.NEW_TAB, handleNewTabShortcut);
+    window.removeEventListener('canvas:request-tab-close', onCanvasCloseRequest);
   });
 </script>
 
@@ -528,7 +546,7 @@
     {#each filteredTabs as tab (tab.id)}
       <button
         class="tab"
-        class:on={$activeTabId === tab.id}
+        class:on={$activeTabId === tab.id && (tab.mode === $mode || tab.mode === 'settings')}
         class:tab-dirty={tab.mode === 'rest' && (tab.dirty || tab.unsaved)}
         onclick={() => handleTabClick(tab.id)}
         oncontextmenu={(e: MouseEvent) => handleTabContextMenu(e, tab)}
@@ -603,7 +621,7 @@
     {#if $mode === 'rest'}
       <EnvPill />
     {/if}
-    {#if $mode !== 'agent' && $mode !== 'workspace' && $mode !== 'history'}
+    {#if $mode !== 'agent' && $mode !== 'workspace' && $mode !== 'history' && $mode !== 'canvas'}
       <button class="ai-toggle-btn" class:active={$aiPanelOpen} onclick={() => { aiPanelOpen.update(v => { const next = !v; aiPanelOpenPerMode.update(m => ({ ...m, [$mode]: next })); return next; }); }} title="AI Assistant">
         <svg viewBox="0 0 24 24"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg>
       </button>
@@ -678,6 +696,9 @@
   }}
   ondiscard={() => {
     handleDiscardAndClose();
+  }}
+  oncancel={() => {
+    closeConfirmKeepMode = false;
   }}
 />
 
