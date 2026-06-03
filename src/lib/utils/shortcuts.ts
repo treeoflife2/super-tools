@@ -1,5 +1,5 @@
 import { get } from 'svelte/store';
-import { mode, setMode } from '$lib/stores/app';
+import { mode, setMode, effectiveMode } from '$lib/stores/app';
 import { navOpen, aiPanelOpen, aiPanelOpenPerMode, activeModal } from '$lib/stores/app';
 import { tabs, activeTabId, closeTab, getDraft, markClean } from '$lib/shared/stores/tabs';
 import { commitRequest } from '$lib/modes/rest/stores';
@@ -172,7 +172,9 @@ function handleKeydown(e: KeyboardEvent) {
   // its own special meaning: toggle the shell panel. Canvas mode hides
   // the AI panel UI entirely, so the shortcut is a no-op there too.
   if (meta && e.key === 'l' && !e.shiftKey) {
-    const currentMode = get(mode);
+    // Use the effective mode so an Atlas tile focused on a SQL/REST/Explorer
+    // tab opens the matching AI assistant instead of being a no-op.
+    const currentMode = get(effectiveMode);
     if (currentMode === 'agent') {
       // In agent mode, Cmd+L toggles the shell panel (only if a session is active)
       import('$lib/modes/agent/stores').then(({ agentShellOpen, activeAgentSession }) => {
@@ -184,7 +186,7 @@ function handleKeydown(e: KeyboardEvent) {
       e.preventDefault();
       return;
     }
-    if (currentMode === 'workspace' || currentMode === 'history' || currentMode === 'canvas') {
+    if (currentMode === 'workspace' || currentMode === 'history') {
       e.preventDefault();
       return;
     }
