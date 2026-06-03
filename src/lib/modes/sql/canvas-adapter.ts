@@ -53,7 +53,7 @@ export const sqlEditorAdapter: CanvasTabAdapter = {
   attach(tabId, slot) {
     const tab = findTabByKey(tabId);
     if (!tab) return;
-    attachSqlEditor(tab.id, slot);
+    attachSqlEditor(tab.id, slot, { showHeader: true });
   },
 
   detach(tabId, slot) {

@@ -6,8 +6,10 @@ import { oneDarkHighlightStyle } from '@codemirror/theme-one-dark';
 import { syntaxHighlighting } from '@codemirror/language';
 import { defaultKeymap, historyKeymap, indentWithTab, history } from '@codemirror/commands';
 import { search, searchKeymap } from '@codemirror/search';
+import { mount, unmount } from 'svelte';
 import { mod } from '$lib/utils/platform';
 import { getSqlTabData, setSqlTabData } from '../stores';
+import SqlTileHeader from '../components/SqlTileHeader.svelte';
 
 /**
  * Singleton registry of CodeMirror EditorViews keyed by SQL tab id.
@@ -26,7 +28,20 @@ import { getSqlTabData, setSqlTabData } from '../stores';
 
 export interface SqlEditorEntry {
   view: EditorView;
+  /** Outer wrapper that gets reparented between hosts. Contains
+   *  `headerSlot` and `editorSlot`. */
   container: HTMLDivElement;
+  /** Thin strip above the editor. Hidden by default; the canvas tile
+   *  toggles it on via `setHeaderVisible(tabId, true)` so the
+   *  in-tile connection picker only renders in tiles, not in the
+   *  home-mode SqlPanel (which has its own action-bar picker). */
+  headerSlot: HTMLDivElement;
+  /** Hosts CodeMirror's view.dom. */
+  editorSlot: HTMLDivElement;
+  /** Mounted SqlTileHeader Svelte component. Created once per entry
+   *  and stays alive across reparents, so its dropdown state and
+   *  derived subscriptions persist. */
+  header: ReturnType<typeof mount> | null;
   /** Owns the sql() + autocompletion() config. Reconfigured by
    *  QueryEditor when tables / columnMap / dialect change. */
   sqlCompartment: Compartment;
@@ -183,8 +198,31 @@ function createEntry(tabId: number, initialDoc: string): SqlEditorEntry {
   container.style.minHeight = '0';
   container.style.overflow = 'hidden';
 
-  const view = new EditorView({ state, parent: container });
-  return { view, container, sqlCompartment, execKeymapCompartment };
+  const headerSlot = document.createElement('div');
+  headerSlot.className = 'sql-editor-header-slot';
+  headerSlot.style.display = 'none';
+  headerSlot.style.flexShrink = '0';
+  container.appendChild(headerSlot);
+
+  const editorSlot = document.createElement('div');
+  editorSlot.className = 'sql-editor-editor-slot';
+  editorSlot.style.flex = '1';
+  editorSlot.style.minHeight = '0';
+  editorSlot.style.display = 'flex';
+  editorSlot.style.flexDirection = 'column';
+  editorSlot.style.overflow = 'hidden';
+  container.appendChild(editorSlot);
+
+  const view = new EditorView({ state, parent: editorSlot });
+  return {
+    view,
+    container,
+    headerSlot,
+    editorSlot,
+    header: null,
+    sqlCompartment,
+    execKeymapCompartment,
+  };
 }
 
 export function getSqlEditorEntry(tabId: number): SqlEditorEntry | undefined {
@@ -195,6 +233,13 @@ export function getSqlEditorView(tabId: number): EditorView | undefined {
   return editors.get(tabId)?.view;
 }
 
+export interface AttachOptions {
+  /** Show the in-tile connection picker strip above the editor. Pass
+   *  `true` from canvas tile mounts; leave unset (or false) for the
+   *  home-mode SqlPanel, which renders its own action-bar picker. */
+  showHeader?: boolean;
+}
+
 /**
  * Mount the EditorView for `tabId` into `slot`. Lazily creates the view
  * on first attach using `sqlTabState[tabId].query` as the initial doc.
@@ -202,12 +247,28 @@ export function getSqlEditorView(tabId: number): EditorView | undefined {
  * previous parent, preserving CodeMirror's internal state. Calls
  * requestMeasure + focus so layout and focus settle into the new slot.
  */
-export function attachSqlEditor(tabId: number, slot: HTMLElement): void {
+export function attachSqlEditor(
+  tabId: number,
+  slot: HTMLElement,
+  options: AttachOptions = {},
+): void {
   let entry = editors.get(tabId);
   if (!entry) {
     const initialDoc = getSqlTabData(tabId).query ?? '';
     entry = createEntry(tabId, initialDoc);
     editors.set(tabId, entry);
+  }
+
+  if (options.showHeader) {
+    if (!entry.header) {
+      entry.header = mount(SqlTileHeader, {
+        target: entry.headerSlot,
+        props: { tabId },
+      });
+    }
+    entry.headerSlot.style.display = '';
+  } else {
+    entry.headerSlot.style.display = 'none';
   }
 
   slot.appendChild(entry.container);
@@ -217,9 +278,6 @@ export function attachSqlEditor(tabId: number, slot: HTMLElement): void {
   } catch {
     // Slot may not have measurable dimensions yet on first mount.
   }
-  // Only auto-focus if nothing else holds focus (body or null). Yanking
-  // focus from another input — sidebar search, modal, another tile —
-  // would surprise the user.
   const active = document.activeElement;
   if (!active || active === document.body) {
     entry.view.focus();
@@ -253,6 +311,14 @@ export function detachSqlEditor(tabId: number, slot: HTMLElement): void {
 export function destroySqlEditor(tabId: number): void {
   const entry = editors.get(tabId);
   if (!entry) return;
+  if (entry.header) {
+    try {
+      unmount(entry.header);
+    } catch {
+      // best-effort teardown
+    }
+    entry.header = null;
+  }
   try {
     entry.view.destroy();
   } catch {
