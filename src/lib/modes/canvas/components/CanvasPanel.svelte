@@ -23,10 +23,6 @@
     redisQueryAdapter,
   } from '$lib/modes/nosql/canvas-adapter';
   import { sqlEditorAdapter } from '$lib/modes/sql/canvas-adapter';
-  import {
-    workspaceNoteAdapter,
-    workspaceBoardAdapter,
-  } from '$lib/modes/workspace/canvas-adapter';
   import { canvasEnabled } from '$lib/modes/canvas/stores/canvasEnabled';
   import { startRenderScaleSync } from '$lib/modes/canvas/services/xtermRenderScale';
   import { mode } from '$lib/stores/app';
@@ -102,8 +98,6 @@
     canvasAdapterRegistry.register(mongoQueryAdapter);
     canvasAdapterRegistry.register(redisQueryAdapter);
     canvasAdapterRegistry.register(sqlEditorAdapter);
-    canvasAdapterRegistry.register(workspaceNoteAdapter);
-    canvasAdapterRegistry.register(workspaceBoardAdapter);
 
     setActiveWorkspace(ACTIVE_WORKSPACE_ID);
     const v = await canvasGetViewport(ACTIVE_WORKSPACE_ID);
@@ -123,8 +117,6 @@
       mongoQueryAdapter.subscribe(ACTIVE_WORKSPACE_ID, scheduleResolve),
       redisQueryAdapter.subscribe(ACTIVE_WORKSPACE_ID, scheduleResolve),
       sqlEditorAdapter.subscribe(ACTIVE_WORKSPACE_ID, scheduleResolve),
-      workspaceNoteAdapter.subscribe(ACTIVE_WORKSPACE_ID, scheduleResolve),
-      workspaceBoardAdapter.subscribe(ACTIVE_WORKSPACE_ID, scheduleResolve),
     );
   }
 
