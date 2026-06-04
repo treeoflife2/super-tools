@@ -4,7 +4,7 @@ import type { CanvasTabAdapter } from '$lib/modes/canvas/adapter';
 import { tabs, activateTab, draftRequests } from '$lib/shared/stores/tabs';
 import { activeRequest, activeRequestId, loadRequest } from '$lib/modes/rest/stores';
 import { setMode } from '$lib/stores/app';
-import RestRequestTileBody from './components/RestRequestTileBody.svelte';
+import RestRequestTileBody from './components/RestRequestTileFullBody.svelte';
 
 export const restRequestAdapter: CanvasTabAdapter = {
   tabKind: 'rest_request',
