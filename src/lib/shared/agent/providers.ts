@@ -41,7 +41,7 @@ export const PROVIDER_INSTALL_INFO: Record<AgentProvider, ProviderInstallInfo> =
   },
   codex: {
     name: 'Codex CLI',
-    docsUrl: 'https://github.com/openai/codex',
+    docsUrl: 'https://developers.openai.com/codex/quickstart',
     mac: [
       { label: 'Homebrew', cmd: 'brew install --cask codex' },
       { label: 'npm', cmd: 'npm install -g @openai/codex' },
@@ -55,7 +55,7 @@ export const PROVIDER_INSTALL_INFO: Record<AgentProvider, ProviderInstallInfo> =
   },
   gemini: {
     name: 'Gemini CLI',
-    docsUrl: 'https://github.com/google-gemini/gemini-cli',
+    docsUrl: 'https://google-gemini.github.io/gemini-cli/docs/get-started/',
     mac: [
       { label: 'Homebrew', cmd: 'brew install gemini-cli' },
       { label: 'npm', cmd: 'npm install -g @google/gemini-cli' },
@@ -69,7 +69,7 @@ export const PROVIDER_INSTALL_INFO: Record<AgentProvider, ProviderInstallInfo> =
   },
   opencode: {
     name: 'OpenCode',
-    docsUrl: 'https://opencode.ai/docs/',
+    docsUrl: 'https://opencode.ai/docs/cli/',
     mac: [
       { label: 'Install script', cmd: 'curl -fsSL https://opencode.ai/install | bash' },
       { label: 'Homebrew', cmd: 'brew install anomalyco/tap/opencode' },
