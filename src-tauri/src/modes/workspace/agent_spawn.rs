@@ -684,16 +684,17 @@ fn oneshot_argv(
             } else {
                 format!("{persona}\n\n---\n\n{prompt}")
             };
+            // Antigravity CLI (`agy`) replaced gemini-cli on 2026-06-18.
+            // Flag rename map vs old gemini-cli:
+            //   --skip-trust → removed (no trust gate)
+            //   --yolo       → --dangerously-skip-permissions
+            //   --resume     → --continue
             let mut argv = vec![
-                // Antigravity CLI (`agy`) replaced gemini-cli on
-                // 2026-06-18; internal provider id stays "gemini".
                 "agy".to_string(),
-                "--skip-trust".to_string(),
-                "--yolo".to_string(),
+                "--dangerously-skip-permissions".to_string(),
             ];
             if resume_id.is_some() {
-                argv.push("--resume".to_string());
-                argv.push("latest".to_string());
+                argv.push("--continue".to_string());
             }
             argv.push("-p".to_string());
             argv.push(body);

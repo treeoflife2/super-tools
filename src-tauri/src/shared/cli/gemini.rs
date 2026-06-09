@@ -99,25 +99,23 @@ impl CliRunner for GeminiRunner {
             .filter(|p| !p.is_empty())
             .map(crate::shared::cli::runner::shell_quote_path)
             .unwrap_or_else(|| BINARY.to_string());
-        // Always pass `--skip-trust` so the spawn doesn't hang on an
-        // unanswered trust prompt inside the PTY. Users can still review
-        // workspaces via the standalone `gemini` flow if they want a
-        // formal trust answer persisted.
-        let mut cmd = format!("{head} --skip-trust");
-        // Resume: Gemini's --resume takes an integer index or the
-        // literal "latest". UUIDs aren't accepted. Treat any well-shaped
-        // session id we got back from `agent_resolve_resume_id` as a
-        // "yes, resume the most recent session in this project" signal
-        // — that's exactly what discovery returns.
+        // Antigravity (agy) replaced the old gemini-cli flags:
+        //   --skip-trust  → removed (no trust gate concept)
+        //   --yolo        → --dangerously-skip-permissions
+        //   --resume <N>  → --continue (most recent) | --conversation <id>
+        let mut cmd = head.clone();
+        // Resume: agy accepts either `--continue` (resume the most
+        // recent conversation in this workspace) or `--conversation
+        // <uuid>` (resume a specific one). We currently only know
+        // "is there a prior session" via the heuristic in the old code,
+        // so fall back to --continue when any well-shaped id is present.
         if let Some(sid) = opts.resume_session_id.as_deref() {
             if looks_like_uuid(sid) {
-                cmd.push_str(" --resume latest");
+                cmd.push_str(" --continue");
             }
         }
         if opts.skip_permissions {
-            // YOLO mode auto-approves all tool calls — the same effect
-            // as Claude's `--dangerously-skip-permissions` flag.
-            cmd.push_str(" --yolo");
+            cmd.push_str(" --dangerously-skip-permissions");
         }
         // No first-class system-prompt flag exists, and the previous
         // workaround (`--prompt-interactive '<text>'`) had a serious
