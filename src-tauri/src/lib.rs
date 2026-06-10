@@ -9,6 +9,19 @@ mod telemetry;
 use std::sync::Arc;
 use tauri::Manager;
 
+/// Best-effort: write any not-yet-pushed sync kinds to settings so the next
+/// boot can re-queue them. Never blocks quit on the network.
+async fn persist_pending_sync(app: &tauri::AppHandle) {
+    let kinds = cloud::scheduler::pending_kinds();
+    if kinds.is_empty() {
+        return;
+    }
+    if let Some(pool) = app.try_state::<sqlx::SqlitePool>() {
+        let joined = kinds.join(",");
+        let _ = shared::repos::settings::upsert(pool.inner(), "cloud:pending_dirty", &joined).await;
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default();
@@ -165,6 +178,24 @@ pub fn run() {
                 );
                 if auth_state.is_connected() {
                     app.state::<cloud::scheduler::Scheduler>().enable();
+                    // Re-queue kinds that were dirty when the app last quit.
+                    tauri::async_runtime::block_on(async {
+                        if let Ok(Some(row)) = shared::repos::settings::get_by_key(
+                            &pool_for_auth,
+                            "cloud:pending_dirty",
+                        )
+                        .await
+                        {
+                            let slugs: Vec<String> =
+                                row.value.split(',').map(|s| s.to_string()).collect();
+                            cloud::scheduler::rebump_slugs(&slugs);
+                            let _ = sqlx::query(
+                                "DELETE FROM settings WHERE key = 'cloud:pending_dirty'",
+                            )
+                            .execute(&pool_for_auth)
+                            .await;
+                        }
+                    });
                 }
             }
 
@@ -253,7 +284,11 @@ pub fn run() {
                     .on_menu_event(move |app_handle: &tauri::AppHandle, event: tauri::menu::MenuEvent| {
                         let id = event.id().as_ref();
                         if id == "quit" {
-                            app_handle.exit(0);
+                            let ah = app_handle.clone();
+                            tauri::async_runtime::spawn(async move {
+                                persist_pending_sync(&ah).await;
+                                ah.exit(0);
+                            });
                         } else if id == "show" {
                             if let Some(window) = app_handle.get_webview_window("main") {
                                 let _ = window.show();
@@ -591,6 +626,22 @@ pub fn run() {
                 if let Some(window) = _app_handle.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
+                }
+            }
+
+            // Quit (Cmd+Q / OS shutdown / exit(0)): persist any not-yet-pushed
+            // sync kinds before letting the process die. The AtomicBool gates a
+            // single deferral — the re-issued exit(0) passes straight through.
+            if let tauri::RunEvent::ExitRequested { api, .. } = &_event {
+                use std::sync::atomic::{AtomicBool, Ordering};
+                static PERSISTED: AtomicBool = AtomicBool::new(false);
+                if !PERSISTED.swap(true, Ordering::SeqCst) {
+                    api.prevent_exit();
+                    let ah = _app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        persist_pending_sync(&ah).await;
+                        ah.exit(0);
+                    });
                 }
             }
         });

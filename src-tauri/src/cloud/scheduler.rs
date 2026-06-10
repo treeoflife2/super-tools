@@ -60,6 +60,27 @@ fn drain() -> Vec<&'static str> {
     dirty().lock().drain().collect()
 }
 
+/// Non-destructive view of the dirty set — used by the quit path to
+/// persist pending kinds so they survive a restart.
+pub fn pending_kinds() -> Vec<&'static str> {
+    dirty().lock().iter().copied().collect()
+}
+
+/// Re-mark kinds dirty by slug (boot-time recovery of a persisted set).
+/// Unknown slugs are ignored. Uses the canonical &'static strs from
+/// ALL_KINDS so the HashSet<&'static str> type holds.
+pub fn rebump_slugs(slugs: &[String]) {
+    for s in slugs {
+        if let Some(k) = crate::cloud::domains::ALL_KINDS
+            .iter()
+            .copied()
+            .find(|k| *k == s.as_str())
+        {
+            bump(k);
+        }
+    }
+}
+
 /// Spawn the scheduler loop. Lives for the app's lifetime.
 pub fn spawn(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
