@@ -336,23 +336,37 @@
         }
     }
 
+    async function reloadSyncedStores() {
+        const [r, s, n, ssh, agent, explorer, workspace] = await Promise.all([
+            import("$lib/modes/rest/stores"),
+            import("$lib/modes/sql/stores"),
+            import("$lib/modes/nosql/stores"),
+            import("$lib/modes/ssh/stores"),
+            import("$lib/modes/agent/stores"),
+            import("$lib/modes/explorer/stores"),
+            import("$lib/modes/workspace/stores"),
+        ]);
+        await Promise.all([
+            r.loadCollections(),
+            r.loadEnvironments(),
+            s.loadConnections(),
+            s.loadSqlScripts(),
+            n.loadNoSqlConnections(),
+            ssh.loadSshProfiles(),
+            agent.loadAgentSessions(),
+            agent.loadAgentContexts(),
+            explorer.loadExplorerConnections(),
+            workspace.loadWorkspaces(),
+            workspace.loadCoworkers(),
+        ]);
+    }
+
     async function pullFromCloud() {
         if ($syncing) return;
         setSyncing(true);
         try {
             await cloudSyncRestore();
-            const [r, s, n] = await Promise.all([
-                import("$lib/modes/rest/stores"),
-                import("$lib/modes/sql/stores"),
-                import("$lib/modes/nosql/stores"),
-            ]);
-            await Promise.all([
-                r.loadCollections(),
-                r.loadEnvironments(),
-                s.loadConnections(),
-                s.loadSqlScripts(),
-                n.loadNoSqlConnections(),
-            ]);
+            await reloadSyncedStores();
             const { announceRestoreCompletion } = await import(
                 "$lib/stores/missingCredentials"
             );
@@ -424,18 +438,7 @@
         restoringSnapshot = s.fileName;
         try {
             await cloudRestoreSnapshot(s.fileName);
-            const [r, q, n] = await Promise.all([
-                import("$lib/modes/rest/stores"),
-                import("$lib/modes/sql/stores"),
-                import("$lib/modes/nosql/stores"),
-            ]);
-            await Promise.all([
-                r.loadCollections(),
-                r.loadEnvironments(),
-                q.loadConnections(),
-                q.loadSqlScripts(),
-                n.loadNoSqlConnections(),
-            ]);
+            await reloadSyncedStores();
             showToast("Snapshot restored", "success");
         } catch (e) {
             showToast(friendlyError(e), "error");
