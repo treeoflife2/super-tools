@@ -383,6 +383,7 @@ pub fn run() {
             cloud::commands::cloud_unlink_provider,
             cloud::commands::cloud_update_profile,
             cloud::commands::cloud_check_remote_exists,
+            cloud::commands::cloud_remote_state,
             cloud::commands::cloud_sync_push_now,
             cloud::commands::cloud_sync_restore,
             cloud::commands::cloud_get_conflicts,

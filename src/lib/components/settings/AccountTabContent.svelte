@@ -40,14 +40,16 @@
         cloudUpdateProfile,
         cloudListSnapshots,
         cloudRestoreSnapshot,
+        cloudRemoteState,
         type SnapshotInfo,
+        type SyncStateRow,
     } from "$lib/commands/cloud";
     import { showToast } from "$lib/shared/primitives/toast";
     import { friendlyError } from "$lib/utils/errors";
     import Dropdown from "$lib/shared/primitives/Dropdown.svelte";
     import ConfirmDialog from "$lib/shared/primitives/ConfirmDialog.svelte";
     import { APP_EVENT } from "$lib/shared/constants/events";
-    import { settings } from "$lib/stores/settings";
+    import { settings, setSetting } from "$lib/stores/settings";
 
     let displayNameInput = $state("");
     let firstNameInput = $state("");
@@ -197,7 +199,11 @@
     }
 
     onMount(() => {
-        if (get(cloudConnected)) refreshStatus().catch(() => {});
+        if (get(cloudConnected)) {
+            refreshStatus().catch(() => {});
+            loadRemoteState();
+        }
+        initDeviceName();
         loadSnapshots();
         tickerId = setInterval(() => {
             now = Date.now();
@@ -322,6 +328,7 @@
             } catch {
                 /* non-fatal */
             }
+            loadRemoteState();
             const elapsed = Date.now() - startedAt;
             if (elapsed < 350)
                 await new Promise((r) => setTimeout(r, 350 - elapsed));
@@ -513,6 +520,14 @@
         return new Date(hasTz ? s : s.replace(" ", "T") + "Z").getTime();
     }
 
+    function fmtAgo(t: number): string {
+        const diff = Math.max(0, Date.now() - t);
+        if (diff < 60_000) return "just now";
+        if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+        if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+        return new Date(t).toLocaleDateString();
+    }
+
     let lastSyncOverall = $derived.by(() => {
         void now;
         let max = 0;
@@ -521,12 +536,79 @@
             if (t > max) max = t;
         }
         if (!max) return null;
-        const diff = Math.max(0, Date.now() - max);
-        if (diff < 60_000) return "just now";
-        if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-        if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-        return new Date(max).toLocaleDateString();
+        return fmtAgo(max);
     });
+
+    // Remote per-kind state (last writing device) — lazy-loaded, decorative.
+    let remoteState = $state<SyncStateRow[]>([]);
+    async function loadRemoteState() {
+        try {
+            remoteState = await cloudRemoteState();
+        } catch {
+            /* silent — device labels are optional decoration */
+        }
+    }
+
+    let lastSyncDevice = $derived.by(() => {
+        let best: SyncStateRow | null = null;
+        let bestT = 0;
+        for (const r of remoteState) {
+            const t = parseServerTime(r.updatedAt);
+            if (t > bestT) {
+                bestT = t;
+                best = r;
+            }
+        }
+        return best?.deviceName ?? null;
+    });
+
+    let syncBreakdownTitle = $derived.by(() => {
+        void now;
+        return remoteState
+            .map((r) => {
+                const t = parseServerTime(r.updatedAt);
+                const from = r.deviceName ? ` from ${r.deviceName}` : "";
+                return `${snapshotKindLabel(r.kind)} — ${t ? fmtAgo(t) : r.updatedAt}${from}`;
+            })
+            .join("\n");
+    });
+
+    // Device name shown on other devices next to data this one pushed.
+    let deviceNameInput = $state("");
+    async function initDeviceName() {
+        const cur = (get(settings)["cloud:device_name"] ?? "").trim();
+        if (cur) {
+            deviceNameInput = cur;
+            return;
+        }
+        let name = "This device";
+        try {
+            const { hostname } = await import("@tauri-apps/plugin-os");
+            name = ((await hostname()) ?? "").trim() || name;
+        } catch {
+            /* fall back to generic label */
+        }
+        deviceNameInput = name;
+        try {
+            await setSetting("cloud:device_name", name);
+        } catch {
+            /* non-fatal — retried on next edit */
+        }
+    }
+    async function saveDeviceName() {
+        const v = deviceNameInput.trim().slice(0, 64);
+        if (!v) {
+            deviceNameInput = (get(settings)["cloud:device_name"] ?? "").trim();
+            return;
+        }
+        deviceNameInput = v;
+        if (v === get(settings)["cloud:device_name"]) return;
+        try {
+            await setSetting("cloud:device_name", v);
+        } catch (e) {
+            showToast(friendlyError(e), "error");
+        }
+    }
 
     function copyHandle() {
         const slug = $cloudUser?.slug ?? "";
@@ -788,11 +870,19 @@
                 <div class="acc-card-head">
                     <h3 class="acc-card-title">Profile</h3>
                     <div class="acc-sync-controls">
-                        <div class="acc-sync-status">
+                        <div
+                            class="acc-sync-status"
+                            title={syncBreakdownTitle || undefined}
+                        >
                             <span class="acc-sync-label">Last sync</span>
                             <span class="acc-sync-value"
                                 >{lastSyncOverall ?? "Never"}</span
                             >
+                            {#if lastSyncOverall && lastSyncDevice}
+                                <span class="acc-sync-device"
+                                    >from {lastSyncDevice}</span
+                                >
+                            {/if}
                         </div>
                         {#if $cloudConflicts.length > 0}
                             <!-- Conflict-mode replacement for the Sync
@@ -932,6 +1022,16 @@
                             />
                         </label>
                     </div>
+                    <label class="acc-field">
+                        <span class="acc-field-label">Device name</span>
+                        <input
+                            type="text"
+                            bind:value={deviceNameInput}
+                            maxlength="64"
+                            onblur={saveDeviceName}
+                            onchange={saveDeviceName}
+                        />
+                    </label>
                     <div class="acc-fields-footer">
                         <p class="acc-fine"></p>
                         <button
@@ -1803,6 +1903,14 @@
         font-size: 11.5px;
         color: var(--t2);
         font-variant-numeric: tabular-nums;
+    }
+    .acc-sync-device {
+        font-size: 10px;
+        color: var(--t3);
+        max-width: 140px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
     .acc-sync-btn {
         display: inline-flex;

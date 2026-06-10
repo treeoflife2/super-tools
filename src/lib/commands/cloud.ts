@@ -73,6 +73,17 @@ export const cloudCheckRemoteExists = () =>
 export const cloudSyncPushNow = () =>
   invoke<string[]>('cloud_sync_push_now');
 
+export interface SyncStateRow {
+  kind: string;
+  contentHash: string;
+  updatedAt: string;
+  deviceId?: string | null;
+  deviceName?: string | null;
+}
+
+export const cloudRemoteState = () =>
+  invoke<SyncStateRow[]>('cloud_remote_state');
+
 export const cloudSyncRestore = () =>
   invoke<string[]>('cloud_sync_restore');
 

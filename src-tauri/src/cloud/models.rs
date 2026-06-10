@@ -105,6 +105,10 @@ pub struct SyncStateRow {
     pub kind: String,
     pub content_hash: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub device_id: Option<String>,
+    #[serde(default)]
+    pub device_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

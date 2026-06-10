@@ -255,6 +255,18 @@ pub async fn cloud_check_remote_exists(
     Ok(!rows.is_empty())
 }
 
+/// Remote per-kind state (hash, timestamp, last writing device). Lazy-loaded
+/// by the Account tab to show "from <device>" next to each kind.
+#[tauri::command]
+pub async fn cloud_remote_state(
+    pool: State<'_, SqlitePool>,
+    state: State<'_, AuthState>,
+) -> Result<Vec<crate::cloud::models::SyncStateRow>, String> {
+    client::sync_state(pool.inner(), &state)
+        .await
+        .map_err(String::from)
+}
+
 #[tauri::command]
 pub async fn cloud_sync_push_now(
     pool: State<'_, SqlitePool>,

@@ -290,6 +290,13 @@ pub async fn sync_push(
     payload_b64: &str,
     prev_hash: Option<&str>,
 ) -> Result<SyncPushResponse, CloudError> {
+    let device_id = crate::telemetry::device::ensure_device_id(pool).await;
+    let device_name = crate::shared::repos::settings::get_by_key(pool, "cloud:device_name")
+        .await
+        .ok()
+        .flatten()
+        .map(|r| r.value)
+        .unwrap_or_else(|| "This device".to_string());
     with_google_refresh_retry(pool, state, || async {
         let (token, provider) = state
             .active_token_and_provider()
@@ -303,6 +310,8 @@ pub async fn sync_push(
         if let Some(p) = prev_hash {
             body.insert("prevHash".into(), serde_json::Value::String(p.into()));
         }
+        body.insert("deviceId".into(), serde_json::Value::String(device_id.clone()));
+        body.insert("deviceName".into(), serde_json::Value::String(device_name.clone()));
 
         let resp = client
             .put(url)
