@@ -1,8 +1,31 @@
 use sqlx::SqlitePool;
 
-use crate::cloud::domains::util::{empty_payload, encode, insert_row, select_rows_as_json, SyncPayload};
+use crate::cloud::domains::util::{empty_payload, encode, insert_row, select_rows_as_json, SyncPayload, TableSpec};
 
 pub const KIND: &str = "sql";
+
+pub fn merge_specs() -> &'static [TableSpec] {
+    &[
+        TableSpec {
+            table: "sql_connections",
+            pk: "id",
+            updated_at: Some("updated_at"),
+            columns: &[
+                "id", "name", "driver", "host", "port", "database_name", "username", "ssl",
+                "ssh_profile_id", "sort_order", "created_at", "updated_at",
+            ],
+        },
+        TableSpec {
+            table: "sql_scripts",
+            pk: "id",
+            updated_at: Some("updated_at"),
+            columns: &[
+                "id", "name", "connection_id", "database_name", "query", "sort_order",
+                "created_at", "updated_at",
+            ],
+        },
+    ]
+}
 
 pub async fn build_payload(pool: &SqlitePool) -> Result<SyncPayload, String> {
     let mut payload = empty_payload(KIND);
@@ -16,7 +39,10 @@ pub async fn build_payload(pool: &SqlitePool) -> Result<SyncPayload, String> {
     );
     payload.tables.insert(
         "sql_scripts".into(),
-        select_rows_as_json(pool, "SELECT * FROM sql_scripts ORDER BY sort_order, id").await?,
+        select_rows_as_json(
+            pool,
+            "SELECT id, name, connection_id, database_name, query, sort_order, created_at, updated_at FROM sql_scripts ORDER BY sort_order, id",
+        ).await?,
     );
     Ok(payload)
 }

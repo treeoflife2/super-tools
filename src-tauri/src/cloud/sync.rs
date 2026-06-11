@@ -44,6 +44,21 @@ pub async fn push_kind(
 ) -> Result<PushOutcome, String> {
     let (hash, payload_b64) = export_kind(pool, kind).await?;
 
+    // Worker rejects payloads > 900 KB gzipped (413). Catch oversize
+    // client-side with margin and surface a per-kind warning instead of
+    // failing every push silently.
+    let gz_bytes = payload_b64.len() * 3 / 4;
+    if gz_bytes > 850_000 {
+        settings::upsert(pool, &format!("cloud:too_large:{}", kind), &gz_bytes.to_string())
+            .await
+            .map_err(|e| format!("store too_large: {}", e))?;
+        return Ok(PushOutcome::NoChange);
+    }
+    let _ = sqlx::query("DELETE FROM settings WHERE key = ?")
+        .bind(format!("cloud:too_large:{}", kind))
+        .execute(pool)
+        .await;
+
     let last = settings::get_by_key(pool, &settings_key_hash(kind))
         .await
         .map_err(|e| format!("read last hash: {}", e))?
@@ -75,7 +90,20 @@ pub async fn push_kind(
             let _ = clear_conflict_flag(pool, kind).await;
             Ok(PushOutcome::Pushed)
         }
-        Err(CloudError::Conflict { current_hash, .. }) => {
+        Err(CloudError::Conflict { current_hash, current_updated_at }) => {
+            // Lost-ack case: the server already has EXACTLY the content we
+            // just sent (a previous push committed but its response was
+            // lost). Not a conflict — record success and move on.
+            if current_hash.as_deref() == Some(hash.as_str()) {
+                settings::upsert(pool, &settings_key_hash(kind), &hash)
+                    .await
+                    .map_err(|e| format!("store hash: {}", e))?;
+                if let Some(ts) = &current_updated_at {
+                    let _ = settings::upsert(pool, &settings_key_synced_at(kind), ts).await;
+                }
+                let _ = clear_conflict_flag(pool, kind).await;
+                return Ok(PushOutcome::Pushed);
+            }
             // Park this kind in conflict-locked state. The flag's value is the
             // remote hash, so the resolver can fetch & summarise the right blob.
             let marker = current_hash.clone().unwrap_or_else(|| "unknown".to_string());
@@ -123,7 +151,23 @@ pub async fn force_push_kind(
     kind: &str,
 ) -> Result<(), String> {
     match push_kind(pool, state, kind, true).await? {
-        PushOutcome::Pushed | PushOutcome::NoChange => Ok(()),
+        PushOutcome::Pushed => Ok(()),
+        PushOutcome::NoChange => {
+            // NoChange is ambiguous here: either the export genuinely matches
+            // the server, or push_kind skipped an oversize payload. The latter
+            // must NOT count as success — resolve_merge would clear the
+            // conflict flag while the remote still differs.
+            if let Some(row) = settings::get_by_key(pool, &format!("cloud:too_large:{}", kind))
+                .await
+                .map_err(|e| format!("read too_large flag: {}", e))?
+            {
+                return Err(format!(
+                    "'{}' is too large to sync ({} bytes gzipped)",
+                    kind, row.value
+                ));
+            }
+            Ok(())
+        }
         PushOutcome::Conflict { .. } => {
             // 412 even with prev='*' shouldn't happen, but surface a clear error.
             Err("server refused force-push".to_string())
@@ -131,14 +175,27 @@ pub async fn force_push_kind(
     }
 }
 
-/// Resolve a conflict by adopting the remote — pulls the remote blob,
-/// imports it locally, and clears the conflict flag.
+/// Resolve a conflict by adopting the remote — pulls the remote blob and
+/// imports it locally. pull_kind clears the conflict flag itself.
 pub async fn resolve_use_remote(
     pool: &SqlitePool,
     state: &AuthState,
     kind: &str,
 ) -> Result<(), String> {
-    pull_kind(pool, state, kind).await?;
+    pull_kind(pool, state, kind).await
+}
+
+/// Merge-resolve one kind: snapshot → pull remote blob → UPSERT-union into
+/// local → force-push the union → clear conflict flag.
+pub async fn resolve_merge(
+    pool: &SqlitePool,
+    state: &AuthState,
+    kind: &str,
+) -> Result<(), String> {
+    crate::cloud::snapshots::snapshot_kind(pool, kind, "pre-merge").await?;
+    let resp = client::sync_pull(pool, state, kind).await.map_err(String::from)?;
+    crate::cloud::domains::merge_kind(pool, kind, &resp.payload).await?;
+    force_push_kind(pool, state, kind).await?;
     let _ = clear_conflict_flag(pool, kind).await;
     Ok(())
 }
@@ -203,6 +260,8 @@ pub async fn pull_kind(
     state: &AuthState,
     kind: &str,
 ) -> Result<(), String> {
+    // Safety invariant: recovery copy before any destructive import.
+    crate::cloud::snapshots::snapshot_kind(pool, kind, "pre-pull").await?;
     let resp = client::sync_pull(pool, state, kind).await.map_err(String::from)?;
     import_kind(pool, kind, &resp.payload).await?;
     settings::upsert(pool, &settings_key_hash(kind), &resp.content_hash)
@@ -211,6 +270,8 @@ pub async fn pull_kind(
     settings::upsert(pool, &settings_key_synced_at(kind), &resp.updated_at)
         .await
         .map_err(|e| format!("store synced_at: {}", e))?;
+    // Local now equals remote — any prior divergence is resolved.
+    let _ = clear_conflict_flag(pool, kind).await;
     Ok(())
 }
 
@@ -236,20 +297,32 @@ pub async fn pull_all(
 
 /// Lower rank = applied earlier. Parents (referenced by FKs in other
 /// kinds) get a smaller number. Anything not listed sorts to the end —
-/// add new kinds here only when they're FK targets.
-fn pull_order_rank(kind: &str) -> u8 {
+/// add new kinds here only when they're FK targets. Current ordering:
+/// ssh (0) → coworkers (5) → everything else, including the workspace
+/// kinds whose cards/comments reference workspace_coworkers (10).
+pub fn pull_order_rank(kind: &str) -> u8 {
     match kind {
         // ssh_profiles is referenced by sql_connections, nosql_connections,
         // and explorer_connections, so it must restore first.
         k if k == crate::cloud::domains::ssh::KIND => 0,
+        // workspace_coworkers is referenced by workspace_board_cards
+        // (*_by_coworker_id) and workspace_card_comments (coworker_id),
+        // so it must restore before the workspace kinds.
+        k if k == crate::cloud::domains::coworkers::KIND => 5,
         _ => 10,
     }
 }
 
 /// True if the user has any locally-created data in the synced tables.
 /// Used by the first-sign-in flow to decide whether to auto-pull or prompt.
+///
+/// IMPORTANT: this function must list EVERY table that the sync domains
+/// export. Whenever a new sync domain (or new table within an existing
+/// domain) is added, add a corresponding `(SELECT COUNT(*) FROM <table>)`
+/// term here, otherwise the first-sync empty-check will mis-classify
+/// devices that only have data in the new table.
 pub async fn local_has_data(pool: &SqlitePool) -> Result<bool, String> {
-    // OR'd counts across the synced tables. If any has > 0 rows → user has data.
+    // Summed counts across all synced tables. If any has > 0 rows → user has data.
     let row: (i64,) = sqlx::query_as(
         "SELECT \
            (SELECT COUNT(*) FROM collections) + \
@@ -258,7 +331,11 @@ pub async fn local_has_data(pool: &SqlitePool) -> Result<bool, String> {
            (SELECT COUNT(*) FROM ssh_profiles) + \
            (SELECT COUNT(*) FROM explorer_connections) + \
            (SELECT COUNT(*) FROM agent_contexts) + \
-           (SELECT COUNT(*) FROM agent_sessions WHERE origin = 'manual' OR origin IS NULL) \
+           (SELECT COUNT(*) FROM agent_sessions WHERE origin = 'manual' OR origin IS NULL) + \
+           (SELECT COUNT(*) FROM environments) + \
+           (SELECT COUNT(*) FROM sql_scripts) + \
+           (SELECT COUNT(*) FROM workspace_notes) + \
+           (SELECT COUNT(*) FROM workspace_board_cards) \
            AS n",
     )
     .fetch_one(pool)

@@ -255,6 +255,18 @@ pub async fn cloud_check_remote_exists(
     Ok(!rows.is_empty())
 }
 
+/// Remote per-kind state (hash, timestamp, last writing device). Lazy-loaded
+/// by the Account tab to show "from <device>" next to each kind.
+#[tauri::command]
+pub async fn cloud_remote_state(
+    pool: State<'_, SqlitePool>,
+    state: State<'_, AuthState>,
+) -> Result<Vec<crate::cloud::models::SyncStateRow>, String> {
+    client::sync_state(pool.inner(), &state)
+        .await
+        .map_err(String::from)
+}
+
 #[tauri::command]
 pub async fn cloud_sync_push_now(
     pool: State<'_, SqlitePool>,
@@ -301,6 +313,61 @@ pub async fn cloud_resolve_use_remote(
     for k in &kinds {
         sync::resolve_use_remote(pool.inner(), &state, k).await?;
     }
+    Ok(())
+}
+
+/// Per-kind conflict resolution: strategy is "keepLocal" | "useRemote" | "merge".
+#[tauri::command]
+pub async fn cloud_resolve_kind(
+    pool: State<'_, SqlitePool>,
+    state: State<'_, AuthState>,
+    kind: String,
+    strategy: String,
+) -> Result<(), String> {
+    match strategy.as_str() {
+        "keepLocal" => sync::force_push_kind(pool.inner(), &state, &kind).await,
+        "useRemote" => sync::resolve_use_remote(pool.inner(), &state, &kind).await,
+        "merge" => sync::resolve_merge(pool.inner(), &state, &kind).await,
+        _ => Err(format!("unknown strategy: {}", strategy)),
+    }
+}
+
+/// Merge EVERY kind the server has (FK-safe order), then push local-only
+/// kinds and mark synced. Device-setup "Merge" choice.
+#[tauri::command]
+pub async fn cloud_merge_all(
+    pool: State<'_, SqlitePool>,
+    state: State<'_, AuthState>,
+) -> Result<Vec<String>, String> {
+    let rows = client::sync_state(pool.inner(), &state).await.map_err(String::from)?;
+    let mut kinds: Vec<String> = rows.into_iter().map(|r| r.kind).collect();
+    kinds.sort_by_key(|k| sync::pull_order_rank(k));
+    for k in &kinds {
+        sync::resolve_merge(pool.inner(), &state, k).await?;
+    }
+    let all: Vec<&str> = ALL_KINDS.iter().copied().collect();
+    let _ = sync::push_all(pool.inner(), &state, &all).await?;
+    settings::upsert(pool.inner(), SETTINGS_KEY_HAS_SYNCED, "true")
+        .await
+        .map_err(|e| format!("mark synced: {}", e))?;
+    Ok(kinds)
+}
+
+/// Overwrite the cloud with this device's data for ALL kinds (device-setup
+/// "Keep this device's data"). Server-side history keeps the old blobs.
+#[tauri::command]
+pub async fn cloud_force_push_all(
+    pool: State<'_, SqlitePool>,
+    state: State<'_, AuthState>,
+) -> Result<(), String> {
+    for k in ALL_KINDS {
+        // An empty local export overwrites whatever the server holds — that is
+        // the explicit "Keep this device's data" choice; server history archives it.
+        sync::force_push_kind(pool.inner(), &state, k).await?;
+    }
+    settings::upsert(pool.inner(), SETTINGS_KEY_HAS_SYNCED, "true")
+        .await
+        .map_err(|e| format!("mark synced: {}", e))?;
     Ok(())
 }
 
@@ -522,5 +589,51 @@ pub fn cloud_get_active_token(
     state: State<'_, AuthState>,
 ) -> Option<(String, String)> {
     state.active_token_and_provider()
+}
+
+// ─── Local snapshots ────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn cloud_list_snapshots() -> Result<Vec<crate::cloud::snapshots::SnapshotInfo>, String> {
+    crate::cloud::snapshots::list_snapshots()
+}
+
+#[tauri::command]
+pub async fn cloud_restore_snapshot(
+    pool: State<'_, SqlitePool>,
+    file_name: String,
+) -> Result<(), String> {
+    crate::cloud::snapshots::restore_snapshot(pool.inner(), &file_name).await
+}
+
+// ─── Cloud version history ──────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn cloud_history_list(
+    pool: State<'_, SqlitePool>,
+    state: State<'_, AuthState>,
+    kind: String,
+) -> Result<Vec<crate::cloud::models::SyncHistoryEntry>, String> {
+    client::sync_history_list(pool.inner(), &state, &kind)
+        .await
+        .map_err(String::from)
+}
+
+/// Restore an old cloud version onto this device: snapshot local first →
+/// REPLACE local with the historical blob → force-push it (the push itself
+/// archives the current cloud blob, so restores are undoable too).
+#[tauri::command]
+pub async fn cloud_history_restore(
+    pool: State<'_, SqlitePool>,
+    state: State<'_, AuthState>,
+    kind: String,
+    hash: String,
+) -> Result<(), String> {
+    crate::cloud::snapshots::snapshot_kind(pool.inner(), &kind, "pre-history-restore").await?;
+    let blob = client::sync_history_blob(pool.inner(), &state, &kind, &hash)
+        .await
+        .map_err(String::from)?;
+    crate::cloud::domains::import_kind(pool.inner(), &kind, &blob.payload).await?;
+    sync::force_push_kind(pool.inner(), &state, &kind).await
 }
 

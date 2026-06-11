@@ -73,6 +73,17 @@ export const cloudCheckRemoteExists = () =>
 export const cloudSyncPushNow = () =>
   invoke<string[]>('cloud_sync_push_now');
 
+export interface SyncStateRow {
+  kind: string;
+  contentHash: string;
+  updatedAt: string;
+  deviceId?: string | null;
+  deviceName?: string | null;
+}
+
+export const cloudRemoteState = () =>
+  invoke<SyncStateRow[]>('cloud_remote_state');
+
 export const cloudSyncRestore = () =>
   invoke<string[]>('cloud_sync_restore');
 
@@ -84,6 +95,15 @@ export const cloudResolveKeepLocal = () =>
 
 export const cloudResolveUseRemote = () =>
   invoke<void>('cloud_resolve_use_remote');
+
+export const cloudResolveKind = (kind: string, strategy: 'keepLocal' | 'useRemote' | 'merge') =>
+  invoke<void>('cloud_resolve_kind', { kind, strategy });
+
+export const cloudMergeAll = () =>
+  invoke<string[]>('cloud_merge_all');
+
+export const cloudForcePushAll = () =>
+  invoke<void>('cloud_force_push_all');
 
 export const cloudPullIfRemoteNewer = () =>
   invoke<string[]>('cloud_pull_if_remote_newer');
@@ -99,6 +119,32 @@ export const cloudWipeRemote = () =>
 
 export const cloudDeleteAccount = (confirmationSlug: string) =>
   invoke<void>('cloud_delete_account', { confirmationSlug });
+
+export interface SnapshotInfo {
+  fileName: string;
+  kind: string;
+  reason: string;
+  createdAt: string;
+  sizeBytes: number;
+}
+
+export const cloudListSnapshots = () =>
+  invoke<SnapshotInfo[]>('cloud_list_snapshots');
+
+export const cloudRestoreSnapshot = (fileName: string) =>
+  invoke<void>('cloud_restore_snapshot', { fileName });
+
+export interface SyncHistoryEntry {
+  contentHash: string;
+  deviceName: string | null;
+  replacedAt: string;
+}
+
+export const cloudHistoryList = (kind: string) =>
+  invoke<SyncHistoryEntry[]>('cloud_history_list', { kind });
+
+export const cloudHistoryRestore = (kind: string, hash: string) =>
+  invoke<void>('cloud_history_restore', { kind, hash });
 
 import type { ProState } from '$lib/stores/cloud';
 

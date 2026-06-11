@@ -1,19 +1,26 @@
 <script lang="ts">
-  // Conflict resolver — one global Keep mine / Use other device's choice
-  // that applies to every kind currently in conflict-locked state.
+  // Conflict resolver — per-kind Merge / Keep mine / Use cloud rows, plus
+  // all-kinds footer actions (Merge all / Keep my changes / Use other
+  // device's) for users who don't want to decide item by item.
   //
   // Behaviour:
   //   - Reads $cloudConflicts (already kept in sync with Rust events).
   //   - On open, doesn't try to compute fancy per-kind summary stats —
   //     friendly copy + clear primary action wins over technical detail
   //     for the kinds of users hitting this case.
-  //   - Resolution is one Tauri command that loops the conflicted kinds
-  //     either force-pushing or pulling+importing them.
+  //   - Per-kind resolution goes through cloudResolveKind; all-kinds
+  //     resolution loops the conflicted kinds either merging,
+  //     force-pushing, or pulling+importing them.
+  //   - Any path that imports remote data (useRemote / merge) reloads
+  //     the domain stores afterwards so the UI reflects the new local
+  //     state immediately.
   //   - Mid-resolution races: if `cloud:conflicts-changed` fires while
   //     the modal is open, the body re-renders with the new list.
-  import { cloudConflicts } from '$lib/stores/cloud';
-  import { cloudResolveKeepLocal, cloudResolveUseRemote, cloudGetConflicts } from '$lib/commands/cloud';
+  import { cloudConflicts, showDeviceSetup } from '$lib/stores/cloud';
+  import { cloudResolveKeepLocal, cloudResolveUseRemote, cloudResolveKind, cloudGetConflicts } from '$lib/commands/cloud';
+  import { reloadSyncedStores } from '$lib/commands/syncReload';
   import { showToast } from '$lib/shared/primitives/toast';
+  import { kindLabel } from '$lib/shared/utils/kind-label';
 
   /** Teleport the modal subtree to <body>. The Settings pane is mounted
    *  inside .app-workspace which may sit beneath a transformed ancestor
@@ -36,22 +43,19 @@
 
   let { show = $bindable() }: Props = $props();
 
-  let busy = $state<'keep' | 'use' | null>(null);
+  let busy = $state<'keep' | 'use' | 'merge' | null>(null);
+  let kindBusy = $state<string | null>(null);
 
-  /** Friendly display name for a kind id — keeps the modal copy in the
-   *  user's language, not the protocol's. */
-  function label(kind: string): string {
-    switch (kind) {
-      case 'rest':     return 'REST collections';
-      case 'sql':      return 'SQL connections';
-      case 'nosql':    return 'NoSQL connections';
-      case 'agent':    return 'Agent contexts';
-      case 'ssh':      return 'SSH profiles';
-      case 'explorer': return 'Explorer connections';
-      case 'coworkers': return 'Workspace coworkers';
-      default:         return kind;
+  /** Never stack over the device-setup modal. While setup is open the
+   *  resolver stays suppressed (`show` may already be true — rendering is
+   *  gated below). When setup closes, conflicts created in the interim
+   *  are usually self-resolved by the chosen action (merge / force-push /
+   *  pull all clear the flags), so only reopen if any actually remain. */
+  $effect(() => {
+    if (!$showDeviceSetup && show && $cloudConflicts.length === 0) {
+      show = false;
     }
-  }
+  });
 
   /** Refresh the store after a resolve. The Rust resolve commands clear
    *  per-kind conflict flags but don't emit `cloud:conflicts-changed`
@@ -68,7 +72,43 @@
     }
   }
 
+  async function resolveOne(kind: string, strategy: 'merge' | 'keepLocal' | 'useRemote') {
+    if (busy || kindBusy) return;
+    kindBusy = kind;
+    try {
+      await cloudResolveKind(kind, strategy);
+      await refreshConflictsStore();
+      if (strategy !== 'keepLocal') await reloadSyncedStores();
+      showToast(`${kindLabel(kind)} resolved`, 'success');
+      if ($cloudConflicts.length === 0) show = false;
+    } catch (e: any) {
+      showToast(`Couldn’t resolve ${kindLabel(kind)}: ${e?.message ?? e}`, 'error');
+    } finally {
+      kindBusy = null;
+    }
+  }
+
+  async function mergeAll() {
+    if (busy || kindBusy) return;
+    busy = 'merge';
+    try {
+      for (const k of [...$cloudConflicts]) await cloudResolveKind(k, 'merge');
+      showToast('Merged both devices’ changes', 'success');
+    } catch (e: any) {
+      showToast(`Couldn’t merge: ${e?.message ?? e}`, 'error');
+    } finally {
+      // Refresh + reload even when a mid-loop merge fails — the kinds that
+      // DID resolve before the failure must still drop out of the list and
+      // have their imported rows reflected in the UI.
+      await refreshConflictsStore();
+      await reloadSyncedStores().catch((e) => console.warn('[Cloud] reload after merge:', e));
+      if ($cloudConflicts.length === 0) show = false;
+      busy = null;
+    }
+  }
+
   async function keepLocal() {
+    if (busy || kindBusy) return;
     busy = 'keep';
     try {
       await cloudResolveKeepLocal();
@@ -83,10 +123,12 @@
   }
 
   async function useRemote() {
+    if (busy || kindBusy) return;
     busy = 'use';
     try {
       await cloudResolveUseRemote();
       await refreshConflictsStore();
+      await reloadSyncedStores();
       showToast('Used the other device’s version', 'success');
       show = false;
     } catch (e: any) {
@@ -97,12 +139,12 @@
   }
 
   function close() {
-    if (busy) return;
+    if (busy || kindBusy) return;
     show = false;
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && show) {
+    if (e.key === 'Escape' && show && !$showDeviceSetup) {
       e.preventDefault();
       close();
     }
@@ -111,7 +153,7 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-{#if show}
+{#if show && !$showDeviceSetup}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="cr-overlay" use:teleportToBody onclick={close}>
@@ -124,44 +166,77 @@
       <div class="cr-body">
         <p class="cr-lead">
           Your other device made changes while you were editing on this one.
-          Pick which version to keep — your choice applies to everything
-          that diverged.
+          Resolve each item below, or use a footer button to apply one
+          choice to everything that diverged.
         </p>
 
-        <div class="cr-affected">
-          <span class="cr-affected-label">Affected:</span>
-          <span class="cr-affected-list">
-            {#if $cloudConflicts.length === 0}
-              Nothing to resolve.
-            {:else}
-              {$cloudConflicts.map(label).join(' · ')}
-            {/if}
-          </span>
-        </div>
+        {#if $cloudConflicts.length === 0}
+          <div class="cr-affected">
+            <span class="cr-affected-list">Nothing to resolve.</span>
+          </div>
+        {:else}
+          <div class="cr-rows">
+            {#each $cloudConflicts as kind (kind)}
+              <div class="cr-row">
+                <span class="cr-row-label">{kindLabel(kind)}</span>
+                <div class="cr-row-actions">
+                  <button
+                    class="cr-row-btn cr-row-btn-primary"
+                    onclick={() => resolveOne(kind, 'merge')}
+                    disabled={!!busy || !!kindBusy}
+                  >
+                    {kindBusy === kind ? 'Resolving…' : 'Merge'}
+                  </button>
+                  <button
+                    class="cr-row-btn"
+                    onclick={() => resolveOne(kind, 'keepLocal')}
+                    disabled={!!busy || !!kindBusy}
+                  >
+                    Keep mine
+                  </button>
+                  <button
+                    class="cr-row-btn"
+                    onclick={() => resolveOne(kind, 'useRemote')}
+                    disabled={!!busy || !!kindBusy}
+                  >
+                    Use cloud
+                  </button>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
 
         <p class="cr-warn">
-          One of these may include deletions on either side. Review your
-          choice carefully — it can’t be undone from inside Clauge.
+          A snapshot of this device's data is saved before any change —
+          Settings → Account → Local snapshots.
         </p>
       </div>
 
       <footer class="cr-foot">
-        <button class="cr-btn cr-btn-secondary" onclick={close} disabled={!!busy}>
+        <button class="cr-btn cr-btn-secondary" onclick={close} disabled={!!busy || !!kindBusy}>
           Close
         </button>
         <button
           class="cr-btn cr-btn-secondary"
           onclick={useRemote}
-          disabled={!!busy || $cloudConflicts.length === 0}
+          disabled={!!busy || !!kindBusy || $cloudConflicts.length === 0}
         >
           {busy === 'use' ? 'Applying…' : 'Use other device’s'}
         </button>
         <button
-          class="cr-btn cr-btn-primary"
+          class="cr-btn cr-btn-secondary"
           onclick={keepLocal}
-          disabled={!!busy || $cloudConflicts.length === 0}
+          disabled={!!busy || !!kindBusy || $cloudConflicts.length === 0}
         >
           {busy === 'keep' ? 'Saving…' : 'Keep my changes'}
+        </button>
+        <button
+          class="cr-btn cr-btn-primary"
+          onclick={mergeAll}
+          disabled={!!busy || !!kindBusy || $cloudConflicts.length === 0}
+        >
+          {busy === 'merge' ? 'Merging…' : 'Merge all'}
         </button>
       </footer>
     </div>
@@ -249,6 +324,64 @@
     font-weight: 600;
   }
   .cr-affected-list { color: var(--t1); }
+
+  .cr-rows {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 12px;
+    border: 1px solid var(--b1);
+    border-radius: 8px;
+    background: var(--surface-hover);
+    overflow: hidden;
+  }
+  .cr-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+  }
+  .cr-row + .cr-row {
+    border-top: 1px solid var(--b1);
+  }
+  .cr-row-label {
+    color: var(--t1);
+    font-size: 12.5px;
+    font-weight: 500;
+    flex: 1;
+    min-width: 0;
+  }
+  .cr-row-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .cr-row-btn {
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 6px;
+    border: 1px solid var(--b1);
+    background: transparent;
+    color: var(--t1);
+    font-family: var(--ui);
+    font-size: 11.5px;
+    font-weight: 500;
+    cursor: default;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+  }
+  .cr-row-btn:disabled { opacity: 0.5; }
+  .cr-row-btn:hover:not(:disabled) {
+    background: var(--surface-hover);
+    border-color: var(--b2);
+  }
+  .cr-row-btn-primary {
+    background: var(--acc);
+    border-color: var(--acc);
+    color: #fff;
+    font-weight: 600;
+  }
+  .cr-row-btn-primary:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
   .cr-warn {
     margin: 0;
     padding: 10px 12px;

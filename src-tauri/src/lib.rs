@@ -9,6 +9,19 @@ mod telemetry;
 use std::sync::Arc;
 use tauri::Manager;
 
+/// Best-effort: write any not-yet-pushed sync kinds to settings so the next
+/// boot can re-queue them. Never blocks quit on the network.
+async fn persist_pending_sync(app: &tauri::AppHandle) {
+    let kinds = cloud::scheduler::pending_kinds();
+    if kinds.is_empty() {
+        return;
+    }
+    if let Some(pool) = app.try_state::<sqlx::SqlitePool>() {
+        let joined = kinds.join(",");
+        let _ = shared::repos::settings::upsert(pool.inner(), "cloud:pending_dirty", &joined).await;
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default();
@@ -98,6 +111,8 @@ pub fn run() {
                 db::pool::init(&app_data_dir).await
             }).expect("failed to open Clauge database");
 
+            cloud::snapshots::init(&app_data_dir);
+
             tauri::async_runtime::block_on(async {
                 db::migrator::run(&pool).await
             }).expect("failed to apply schema migrations");
@@ -163,6 +178,24 @@ pub fn run() {
                 );
                 if auth_state.is_connected() {
                     app.state::<cloud::scheduler::Scheduler>().enable();
+                    // Re-queue kinds that were dirty when the app last quit.
+                    tauri::async_runtime::block_on(async {
+                        if let Ok(Some(row)) = shared::repos::settings::get_by_key(
+                            &pool_for_auth,
+                            "cloud:pending_dirty",
+                        )
+                        .await
+                        {
+                            let slugs: Vec<String> =
+                                row.value.split(',').map(|s| s.to_string()).collect();
+                            cloud::scheduler::rebump_slugs(&slugs);
+                            let _ = sqlx::query(
+                                "DELETE FROM settings WHERE key = 'cloud:pending_dirty'",
+                            )
+                            .execute(&pool_for_auth)
+                            .await;
+                        }
+                    });
                 }
             }
 
@@ -251,7 +284,11 @@ pub fn run() {
                     .on_menu_event(move |app_handle: &tauri::AppHandle, event: tauri::menu::MenuEvent| {
                         let id = event.id().as_ref();
                         if id == "quit" {
-                            app_handle.exit(0);
+                            let ah = app_handle.clone();
+                            tauri::async_runtime::spawn(async move {
+                                persist_pending_sync(&ah).await;
+                                ah.exit(0);
+                            });
                         } else if id == "show" {
                             if let Some(window) = app_handle.get_webview_window("main") {
                                 let _ = window.show();
@@ -346,11 +383,15 @@ pub fn run() {
             cloud::commands::cloud_unlink_provider,
             cloud::commands::cloud_update_profile,
             cloud::commands::cloud_check_remote_exists,
+            cloud::commands::cloud_remote_state,
             cloud::commands::cloud_sync_push_now,
             cloud::commands::cloud_sync_restore,
             cloud::commands::cloud_get_conflicts,
             cloud::commands::cloud_resolve_keep_local,
             cloud::commands::cloud_resolve_use_remote,
+            cloud::commands::cloud_resolve_kind,
+            cloud::commands::cloud_merge_all,
+            cloud::commands::cloud_force_push_all,
             cloud::commands::cloud_pull_if_remote_newer,
             cloud::commands::cloud_local_has_data,
             cloud::commands::cloud_logout,
@@ -362,6 +403,10 @@ pub fn run() {
             cloud::commands::cloud_ai_balance,
             cloud::commands::cloud_ai_usage,
             cloud::commands::cloud_get_active_token,
+            cloud::commands::cloud_list_snapshots,
+            cloud::commands::cloud_restore_snapshot,
+            cloud::commands::cloud_history_list,
+            cloud::commands::cloud_history_restore,
             cloud::pro_state::pro_state_current,
             cloud::credentials_probe::cloud_probe_missing_credentials,
             modes::rest::import_export::export_collection,
@@ -589,6 +634,22 @@ pub fn run() {
                 if let Some(window) = _app_handle.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
+                }
+            }
+
+            // Quit (Cmd+Q / OS shutdown / exit(0)): persist any not-yet-pushed
+            // sync kinds before letting the process die. The AtomicBool gates a
+            // single deferral — the re-issued exit(0) passes straight through.
+            if let tauri::RunEvent::ExitRequested { api, .. } = &_event {
+                use std::sync::atomic::{AtomicBool, Ordering};
+                static PERSISTED: AtomicBool = AtomicBool::new(false);
+                if !PERSISTED.swap(true, Ordering::SeqCst) {
+                    api.prevent_exit();
+                    let ah = _app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        persist_pending_sync(&ah).await;
+                        ah.exit(0);
+                    });
                 }
             }
         });
