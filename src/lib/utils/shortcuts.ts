@@ -1,5 +1,5 @@
 import { get } from 'svelte/store';
-import { mode } from '$lib/stores/app';
+import { mode, setMode } from '$lib/stores/app';
 import { navOpen, aiPanelOpen, aiPanelOpenPerMode, activeModal } from '$lib/stores/app';
 import { tabs, activeTabId, closeTab, getDraft, markClean } from '$lib/shared/stores/tabs';
 import { commitRequest } from '$lib/modes/rest/stores';
@@ -128,7 +128,7 @@ function handleKeydown(e: KeyboardEvent) {
     const modes = ['agent', 'workspace', 'rest', 'sql', 'nosql', 'ssh', 'explorer', 'history'] as const;
     if (idx >= 0 && idx < modes.length) {
       e.preventDefault();
-      mode.set(modes[idx]);
+      void setMode(modes[idx]);
       return;
     }
   }
@@ -169,7 +169,8 @@ function handleKeydown(e: KeyboardEvent) {
   // a system prompt + tools for it (REST / SQL / NoSQL / SSH /
   // Explorer). Workspace and agent both render the panel as an empty
   // useless chat, so the shortcut is a no-op there. Agent mode keeps
-  // its own special meaning: toggle the shell panel.
+  // its own special meaning: toggle the shell panel. Canvas mode hides
+  // the AI panel UI entirely, so the shortcut is a no-op there too.
   if (meta && e.key === 'l' && !e.shiftKey) {
     const currentMode = get(mode);
     if (currentMode === 'agent') {
@@ -183,7 +184,7 @@ function handleKeydown(e: KeyboardEvent) {
       e.preventDefault();
       return;
     }
-    if (currentMode === 'workspace' || currentMode === 'history') {
+    if (currentMode === 'workspace' || currentMode === 'history' || currentMode === 'canvas') {
       e.preventDefault();
       return;
     }

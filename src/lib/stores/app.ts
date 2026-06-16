@@ -1,10 +1,11 @@
-import { writable } from 'svelte/store';
+import { writable, derived, get } from 'svelte/store';
 import type { AIMessage } from '$lib/types/ai';
 import { STORAGE_KEYS } from '$lib/shared/constants/storage';
+import { focusedTileMode } from '$lib/modes/canvas/stores/canvasStore';
 
-export type AppMode = 'agent' | 'rest' | 'sql' | 'nosql' | 'ssh' | 'explorer' | 'workspace' | 'history';
+export type AppMode = 'agent' | 'canvas' | 'rest' | 'sql' | 'nosql' | 'ssh' | 'explorer' | 'workspace' | 'history';
 
-const VALID_MODES: AppMode[] = ['agent', 'rest', 'sql', 'nosql', 'ssh', 'explorer', 'workspace'];
+const VALID_MODES: AppMode[] = ['agent', 'canvas', 'rest', 'sql', 'nosql', 'ssh', 'explorer', 'workspace'];
 
 function loadInitialMode(): AppMode {
   try {
@@ -22,6 +23,17 @@ mode.subscribe(v => {
     try { localStorage.setItem(STORAGE_KEYS.LAST_MODE, v); } catch { /* ignore */ }
   }
 });
+/**
+ * The mode that hotkeys, AI panel context, and topbar highlight should follow.
+ * On Atlas it follows the focused tile's source mode so a Cmd+L on a focused
+ * SQL tile opens the SQL AI panel, not a canvas-flavoured one. Falls back to
+ * the actual `$mode` everywhere else.
+ */
+export const effectiveMode = derived(
+  [mode, focusedTileMode],
+  ([$m, $tile]) => ($m === 'canvas' && $tile ? $tile : $m),
+);
+
 export const navOpen = writable<boolean>(true);
 export const aiPanelOpen = writable<boolean>(false);
 export const aiPanelOpenPerMode = writable<Record<string, boolean>>({});
@@ -76,6 +88,30 @@ export function countAllChatMessages(): number {
   let n = 0;
   for (const k in h) n += h[k]?.length ?? 0;
   return n;
+}
+
+/**
+ * Switch the active mode safely. When leaving Canvas, flushes pending
+ * viewport and tile-geometry writes BEFORE the Canvas panel unmounts so
+ * the last drag/zoom is persisted.
+ *
+ * Callers should use `await setMode(...)` in async contexts. In sync
+ * handlers (e.g. button click in Sidebar), use `void setMode(...)`.
+ */
+export async function setMode(next: AppMode): Promise<void> {
+  const prev = get(mode);
+  if (prev === next) return;
+  if (prev === 'canvas') {
+    try {
+      const { flushViewportNow, flushDirtyTilesNow, flushDirtyRegionsNow } = await import('$lib/modes/canvas/stores/canvasStore');
+      await flushViewportNow();
+      await flushDirtyTilesNow();
+      await flushDirtyRegionsNow();
+    } catch {
+      // Network/IPC errors from the flush should not block mode switch.
+    }
+  }
+  mode.set(next);
 }
 
 /** Approx. byte size of the AI chat localStorage payload (JSON length). */

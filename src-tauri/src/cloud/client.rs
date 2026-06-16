@@ -7,7 +7,8 @@ use sqlx::SqlitePool;
 use crate::cloud::auth::AuthState;
 use crate::cloud::config::API_BASE_URL;
 use crate::cloud::models::{
-    AuthResponse, MeResponse, SyncPullResponse, SyncPushResponse, SyncStateRow,
+    AuthResponse, MeResponse, SyncHistoryBlob, SyncHistoryEntry, SyncPullResponse,
+    SyncPushResponse, SyncStateRow,
 };
 use crate::shared::http::build_app_http_client;
 
@@ -272,6 +273,39 @@ pub async fn sync_pull(
     .await
 }
 
+/// Archived versions of a kind, newest first (≤5).
+pub async fn sync_history_list(
+    pool: &SqlitePool,
+    state: &AuthState,
+    kind: &str,
+) -> Result<Vec<SyncHistoryEntry>, CloudError> {
+    with_google_refresh_retry(pool, state, || async {
+        let (token, provider) = state
+            .active_token_and_provider()
+            .ok_or(CloudError::NotAuthenticated)?;
+        let path = format!("/api/sync/history/{}", kind);
+        get_json_auth(pool, &path, &token, &provider).await
+    })
+    .await
+}
+
+/// Fetch one archived blob by content hash. 404 surfaces as `CloudError::Server`.
+pub async fn sync_history_blob(
+    pool: &SqlitePool,
+    state: &AuthState,
+    kind: &str,
+    hash: &str,
+) -> Result<SyncHistoryBlob, CloudError> {
+    with_google_refresh_retry(pool, state, || async {
+        let (token, provider) = state
+            .active_token_and_provider()
+            .ok_or(CloudError::NotAuthenticated)?;
+        let path = format!("/api/sync/history/{}/{}", kind, hash);
+        get_json_auth(pool, &path, &token, &provider).await
+    })
+    .await
+}
+
 /// Push a kind blob with optimistic concurrency.
 ///
 /// `prev_hash` semantics (matches the Worker side):
@@ -290,6 +324,13 @@ pub async fn sync_push(
     payload_b64: &str,
     prev_hash: Option<&str>,
 ) -> Result<SyncPushResponse, CloudError> {
+    let device_id = crate::telemetry::device::ensure_device_id(pool).await;
+    let device_name = crate::shared::repos::settings::get_by_key(pool, "cloud:device_name")
+        .await
+        .ok()
+        .flatten()
+        .map(|r| r.value)
+        .unwrap_or_else(|| "This device".to_string());
     with_google_refresh_retry(pool, state, || async {
         let (token, provider) = state
             .active_token_and_provider()
@@ -303,6 +344,8 @@ pub async fn sync_push(
         if let Some(p) = prev_hash {
             body.insert("prevHash".into(), serde_json::Value::String(p.into()));
         }
+        body.insert("deviceId".into(), serde_json::Value::String(device_id.clone()));
+        body.insert("deviceName".into(), serde_json::Value::String(device_name.clone()));
 
         let resp = client
             .put(url)

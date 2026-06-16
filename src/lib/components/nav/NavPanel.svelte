@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { mode, navOpen } from '$lib/stores/app';
+  import { mode, navOpen, setMode } from '$lib/stores/app';
   import RestNav from './RestNav.svelte';
   import SqlNav from '$lib/modes/sql/components/SqlNav.svelte';
   import NoSqlNav from '$lib/modes/nosql/components/NoSqlNav.svelte';
@@ -28,7 +28,7 @@
     const existing = get(sharedTabs).find(t => t.mode === 'workspace' && t.key === key);
     if (existing) activateTab(existing.id);
     else addTab('Inbox', 'workspace', key, 'var(--acc)');
-    mode.set('workspace');
+    void setMode('workspace');
     markInboxRead();
   }
 
@@ -37,10 +37,10 @@
     const existing = get(sharedTabs).find(t => t.mode === 'workspace' && t.key === key);
     if (existing) activateTab(existing.id);
     else addTab('Co-workers', 'workspace', key, 'var(--acc)');
-    mode.set('workspace');
+    void setMode('workspace');
   }
 
-  let searchPerMode = $state<Record<string, string>>({ rest: '', sql: '', nosql: '', agent: '', ssh: '', workspace: '' });
+  let searchPerMode = $state<Record<string, string>>({ rest: '', sql: '', nosql: '', agent: '', canvas: '', ssh: '', workspace: '' });
   let searchQuery = $derived(searchPerMode[$mode] ?? '');
   let restNavRef: ReturnType<typeof RestNav> | undefined = $state();
   let sqlNavRef: ReturnType<typeof SqlNav> | undefined = $state();
@@ -96,6 +96,7 @@
     sql: 'Search connections…',
     nosql: 'Search connections…',
     agent: 'Search sessions…',
+    canvas: 'Search canvas…',
     ssh: 'Search SSH profiles…',
     explorer: 'Search connections…',
     history: 'Search history…',
@@ -220,7 +221,7 @@
         </button>
       </div>
       <div class="ah-grid">
-        <button class="ah-card" onclick={() => mode.set('history')}>
+        <button class="ah-card" onclick={() => void setMode('history')}>
           <svg class="ah-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           <span class="ah-card-label">History</span>
         </button>
@@ -313,7 +314,7 @@
         />
       </div>
       {#if $mode !== 'history'}
-        <button class="nav-action nav-add" title={addLabels[$mode]} onclick={handleAddClick}>
+        <button class="nav-action nav-add" title={addLabels[$mode as keyof typeof addLabels] ?? 'Add'} onclick={handleAddClick}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 5v14M5 12h14"/>
           </svg>

@@ -48,9 +48,9 @@
     import {
         loadCollections,
         clearActiveRequest,
-        collections,
     } from "$lib/modes/rest/stores";
     import { loadEnvironments } from "$lib/modes/rest/stores";
+    import { loadProviderStatus } from "$lib/shared/stores/providerStatus";
     import {
         loadConnections as loadSqlConnections,
         loadSqlScripts,
@@ -60,7 +60,6 @@
         showSqlDisconnectConfirm,
         sqlDisconnectTarget,
         disconnectFromDb,
-        connections as sqlConnections,
     } from "$lib/modes/sql/stores";
     import { showToast } from "$lib/shared/primitives/toast";
     import ConfirmDialog from "$lib/shared/primitives/ConfirmDialog.svelte";
@@ -69,7 +68,6 @@
         showNoSqlConnectionDialog,
         editingNoSqlConnection,
         handleNoSqlConnectionSave,
-        nosqlConnections,
     } from "$lib/modes/nosql/stores";
     import SqlConnectionDialog from "$lib/modes/sql/components/ConnectionDialog.svelte";
     import NoSqlConnectionDialog from "$lib/modes/nosql/components/ConnectionDialog.svelte";
@@ -81,9 +79,7 @@
     import {
         setConnected,
         setDisconnected,
-        hasSyncedOnce,
-        markSynced,
-        showSyncRestorePrompt,
+        showDeviceSetup,
         setLastSyncedForKinds,
         proState,
         cloudPlan,
@@ -92,19 +88,20 @@
         welcomeProModalOpen,
         welcomeProPlanHint,
         postCheckoutVerifying,
+        hasSyncedOnce,
     } from "$lib/stores/cloud";
     import {
         cloudGetStatus,
         cloudLogout,
-        cloudCheckRemoteExists,
-        cloudSyncPushNow,
         cloudGetConflicts,
         cloudPullIfRemoteNewer,
         proStateCurrent,
     } from "$lib/commands/cloud";
+    import { decideFirstSync } from "$lib/services/firstSync";
+    import DeviceSetupModal from "$lib/components/cloud/DeviceSetupModal.svelte";
     import { listen } from "@tauri-apps/api/event";
     import { cloudConflicts } from "$lib/stores/cloud";
-    import { activeModal, aiPanelOpen, mode } from "$lib/stores/app";
+    import { activeModal, aiPanelOpen, mode, setMode } from "$lib/stores/app";
     import {
         agentSessionKey,
         agentCodexToken,
@@ -172,6 +169,7 @@
     let _syncIntervalRemovedInPart2: null = null;
     let usageLimitsInterval: ReturnType<typeof setInterval> | null = null;
     let updateCheckInterval: ReturnType<typeof setInterval> | null = null;
+    let backgroundPullInterval: ReturnType<typeof setInterval> | null = null;
     let deepLinkUnlisten: (() => void) | null = null;
     // Tracks the last dispatched OAuth token to prevent double-firing
     // (getCurrent() and onOpenUrl can both return the same startup URL).
@@ -263,7 +261,7 @@
                     key,
                     kind === "note" ? "var(--acc)" : "#a78bfa",
                 );
-            mode.set("workspace");
+            void setMode("workspace");
         };
 
         ws.forEach((w, idx) => {
@@ -275,7 +273,7 @@
                 icon: wsIcon,
                 action: () => {
                     activeWorkspaceId.set(w.id);
-                    mode.set("workspace");
+                    void setMode("workspace");
                 },
             });
             const notes = notesMap.get(w.id) ?? [];
@@ -341,7 +339,7 @@
             );
             if (existing) activateTab(existing.id);
             else addTab(note.title, "workspace", key, "var(--acc)");
-            mode.set("workspace");
+            void setMode("workspace");
         } catch (e) {
             showToast(`Failed to create note: ${e}`, "error");
         }
@@ -364,7 +362,7 @@
             );
             if (existing) activateTab(existing.id);
             else addTab(board.name, "workspace", key, "#a78bfa");
-            mode.set("workspace");
+            void setMode("workspace");
         } catch (e) {
             showToast(`Failed to create board: ${e}`, "error");
         }
@@ -632,6 +630,7 @@
         // Periodic sync removed in Part 2 — Rust scheduler handles auto-push now.
         if (usageLimitsInterval) clearInterval(usageLimitsInterval);
         if (updateCheckInterval) clearInterval(updateCheckInterval);
+        if (backgroundPullInterval) clearInterval(backgroundPullInterval);
     });
 
     function applyAppearanceOnStartup() {
@@ -787,10 +786,10 @@
             loadWorkspaces(),
             loadMcpStatus(),
             refreshInboxUnread(),
-            // (Pre-warm of agent CLI install probes was removed: the
-            // New Session modal no longer disables provider tiles based
-            // on the result. The spawn-time install check still surfaces
-            // the per-provider install guide on first run.)
+            // Probe which agent CLIs are installed once at boot so the
+            // Agent and Workspace provider pickers can render install
+            // status inline without per-modal round-trips.
+            loadProviderStatus(),
         ]);
 
         applyAppearanceOnStartup();
@@ -1068,30 +1067,10 @@
                 );
                 setLastSyncedForKinds(status.lastSynced);
 
-                const localEmpty =
-                    get(collections).length === 0 &&
-                    get(sqlConnections).length === 0 &&
-                    get(nosqlConnections).length === 0;
-
-                if (localEmpty && !get(hasSyncedOnce)) {
-                    // First boot of a fresh device on an existing account.
-                    try {
-                        const remoteHas = await cloudCheckRemoteExists();
-                        if (remoteHas) showSyncRestorePrompt.set(true);
-                        else markSynced();
-                    } catch (e) {
-                        // Don't markSynced — a transient network blip
-                        // shouldn't permanently dismiss the restore option.
-                        console.warn("[Cloud] remote check failed:", e);
-                    }
-                } else if (!get(hasSyncedOnce)) {
-                    // Local has data but we've never synced — fire a one-shot push so
-                    // the server starts in lockstep with this device.
-                    markSynced();
-                    cloudSyncPushNow().catch((e) =>
-                        console.warn("[Cloud] initial push failed:", e),
-                    );
-                }
+                // First boot of a device that has never synced — the
+                // 4-case decision (restore prompt / push / device setup)
+                // lives in firstSync.ts, shared with the login flows.
+                await decideFirstSync();
             } else {
                 // Server says we're not authenticated. The snapshots we
                 // hydrated optimistically above are stale (session expired
@@ -1142,19 +1121,30 @@
             }
         }).catch((e) => console.warn("[REST] change listener failed:", e));
 
-        // ── Pull-on-focus ────────────────────────────────────────────────
-        // When the user Cmd-Tabs back to Clauge, run a lightweight remote-
-        // state check and silently pull any kinds where the server has
-        // moved on AND we don't have unpushed local changes. Debounced to
-        // ≥5 minutes so rapid back-and-forth doesn't spam the Worker.
+        // ── Pull on focus + 15-min interval ──────────────────────────────
+        // Focus catches the user coming back; the interval catches an idle
+        // app the user never leaves. Shared ≥5-min guard so the two
+        // triggers can't double-fire against the Worker. Rust-side
+        // pull_if_remote_newer skips kinds with unpushed local changes.
         let lastFocusPull = 0;
-        window.addEventListener("focus", () => {
+        const pullIfDue = () => {
+            // Until the first-sync decision resolves there are no per-kind
+            // hashes to compare — Rust would skip everything anyway; bail
+            // early to make the intent explicit and save the network call.
+            if (!get(hasSyncedOnce)) return;
             if (Date.now() - lastFocusPull < 5 * 60_000) return;
             lastFocusPull = Date.now();
-            cloudPullIfRemoteNewer().catch((e) =>
-                console.warn("[Cloud] pull-on-focus:", e),
-            );
-        });
+            cloudPullIfRemoteNewer()
+                .then(async (pulled) => {
+                    if (pulled.length > 0) {
+                        const { reloadSyncedStores } = await import("$lib/commands/syncReload");
+                        await reloadSyncedStores();
+                    }
+                })
+                .catch((e) => console.warn("[Cloud] background pull:", e));
+        };
+        window.addEventListener("focus", pullIfDue);
+        backgroundPullInterval = setInterval(pullIfDue, 15 * 60_000);
 
         // ── Auto-move workspace cards when their PR merges ──────────────
         // Same focus-debounce pattern. Walks loaded boards, checks each
@@ -1234,7 +1224,9 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="app-shell" onmousedown={handleGlobalMousedown}>
     <Sidebar />
-    <NavPanel />
+    {#if $mode !== 'canvas'}
+        <NavPanel />
+    {/if}
     <div class="app-content">
         <Topbar />
         <div class="app-workspace">
@@ -1242,7 +1234,9 @@
         </div>
         <StatusBar />
     </div>
-    <AIPanel />
+    {#if $mode !== 'canvas'}
+        <AIPanel />
+    {/if}
 </div>
 
 <!-- Premium theme decorations — each renders nothing for non-matching themes. -->
@@ -1342,6 +1336,7 @@
 <UsageDashboard bind:show={showUsageDashboard} />
 <UpgradeModal />
 <WelcomeProModal />
+<DeviceSetupModal bind:show={$showDeviceSetup} />
 
 <style>
     .app-shell {

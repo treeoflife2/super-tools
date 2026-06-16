@@ -15,8 +15,6 @@
         setDisconnected,
         lastSyncedByKind,
         setLastSyncedForKinds,
-        markSynced,
-        showSyncRestorePrompt,
         cloudConflicts,
         type Provider,
     } from "$lib/stores/cloud";
@@ -30,7 +28,6 @@
         cloudGoogleLoginUrl,
         cloudExchangeCode,
         cloudLinkProvider,
-        cloudCheckRemoteExists,
         cloudUnlinkProvider,
         cloudLogout,
         cloudWipeRemote,
@@ -38,13 +35,24 @@
         cloudSyncPushNow,
         cloudSyncRestore,
         cloudUpdateProfile,
+        cloudListSnapshots,
+        cloudRestoreSnapshot,
+        cloudRemoteState,
+        cloudHistoryList,
+        cloudHistoryRestore,
+        type SnapshotInfo,
+        type SyncStateRow,
+        type SyncHistoryEntry,
     } from "$lib/commands/cloud";
+    import { reloadSyncedStores } from "$lib/commands/syncReload";
+    import { decideFirstSync } from "$lib/services/firstSync";
     import { showToast } from "$lib/shared/primitives/toast";
     import { friendlyError } from "$lib/utils/errors";
     import Dropdown from "$lib/shared/primitives/Dropdown.svelte";
     import ConfirmDialog from "$lib/shared/primitives/ConfirmDialog.svelte";
     import { APP_EVENT } from "$lib/shared/constants/events";
-    import { settings } from "$lib/stores/settings";
+    import { settings, setSetting, loadSettings } from "$lib/stores/settings";
+    import { kindLabel } from "$lib/shared/utils/kind-label";
 
     let displayNameInput = $state("");
     let firstNameInput = $state("");
@@ -103,6 +111,22 @@
     let menuAnchor: HTMLElement | null = $state(null);
     let confirmPull = $state(false);
 
+    let snapshots = $state<SnapshotInfo[]>([]);
+    let restoringSnapshot = $state<string | null>(null);
+    let confirmRestoreSnapshot = $state(false);
+    let snapshotToRestore = $state<SnapshotInfo | null>(null);
+
+    // Cloud version history — lazy-loaded per kind on selection.
+    let historyKind = $state<string | null>(null);
+    let historyEntries = $state<SyncHistoryEntry[]>([]);
+    // Monotonic request token — switching kind pills quickly must not let a
+    // slow stale response overwrite the newer kind's list.
+    let historyReq = 0;
+    let loadingHistory = $state(false);
+    let restoringHistory = $state<string | null>(null);
+    let confirmRestoreHistory = $state(false);
+    let historyToRestore = $state<SyncHistoryEntry | null>(null);
+
     let now = $state(Date.now());
     let tickerId: ReturnType<typeof setInterval> | null = null;
 
@@ -146,41 +170,12 @@
                     "success",
                 );
             }
-            // Only offer the destructive "Restore?" prompt when local
-            // has nothing to lose. If the user already has local data,
-            // pulling cloud would wholesale-replace it (sync::pull_all
-            // is per-domain table replacement). Push the local state up
-            // instead — matches the boot-path behaviour in +layout.svelte.
-            try {
-                const { collections } = await import("$lib/modes/rest/stores");
-                const { connections: sqlConns } = await import("$lib/modes/sql/stores");
-                const { nosqlConnections } = await import("$lib/modes/nosql/stores");
-                const localEmpty =
-                    get(collections).length === 0 &&
-                    get(sqlConns).length === 0 &&
-                    get(nosqlConnections).length === 0;
-
-                const remoteHas = await cloudCheckRemoteExists();
-                if (localEmpty && remoteHas) {
-                    showSyncRestorePrompt.set(true);
-                } else if (localEmpty) {
-                    markSynced();
-                } else {
-                    // Local has data — assume the user wants to keep it.
-                    // Mark synced and push so the cloud picks up this
-                    // device's state. The conflict resolver will fire
-                    // on the next divergence if both sides drift later.
-                    markSynced();
-                    cloudSyncPushNow().catch((e) =>
-                        console.warn("[Cloud] initial push after link failed:", e),
-                    );
-                }
-            } catch (e) {
-                // Network blip — leave hasSyncedOnce unset so the next
-                // boot retries. Don't permanently dismiss the prompt
-                // because of a transient failure.
-                console.warn("[Cloud] remote check after link failed:", e);
-            }
+            // Shared 4-case first-sync decision (restore prompt / push /
+            // device setup) — same path the layout boot block runs.
+            await decideFirstSync();
+            // The lazily-loaded per-kind device/time diagnostics were
+            // fetched (or skipped) while signed out — refresh them now.
+            loadRemoteState();
         } catch (err) {
             showToast(friendlyError(err), "error");
         } finally {
@@ -189,7 +184,12 @@
     }
 
     onMount(() => {
-        if (get(cloudConnected)) refreshStatus().catch(() => {});
+        if (get(cloudConnected)) {
+            refreshStatus().catch(() => {});
+            loadRemoteState();
+        }
+        initDeviceName();
+        loadSnapshots();
         tickerId = setInterval(() => {
             now = Date.now();
         }, 30_000);
@@ -313,6 +313,7 @@
             } catch {
                 /* non-fatal */
             }
+            loadRemoteState();
             const elapsed = Date.now() - startedAt;
             if (elapsed < 350)
                 await new Promise((r) => setTimeout(r, 350 - elapsed));
@@ -332,18 +333,7 @@
         setSyncing(true);
         try {
             await cloudSyncRestore();
-            const [r, s, n] = await Promise.all([
-                import("$lib/modes/rest/stores"),
-                import("$lib/modes/sql/stores"),
-                import("$lib/modes/nosql/stores"),
-            ]);
-            await Promise.all([
-                r.loadCollections(),
-                r.loadEnvironments(),
-                s.loadConnections(),
-                s.loadSqlScripts(),
-                n.loadNoSqlConnections(),
-            ]);
+            await reloadSyncedStores();
             const { announceRestoreCompletion } = await import(
                 "$lib/stores/missingCredentials"
             );
@@ -353,6 +343,103 @@
             showToast(friendlyError(e), "error");
         } finally {
             setSyncing(false);
+        }
+    }
+
+    async function loadSnapshots() {
+        try {
+            snapshots = await cloudListSnapshots();
+        } catch {
+            snapshots = [];
+        }
+    }
+
+    // createdAt is a compact stamp like "20260610T142233.123Z-ab12cd" —
+    // parse the YYYYMMDDTHHMMSS prefix (UTC) into epoch ms, or 0 if odd.
+    function parseSnapshotStamp(stamp: string): number {
+        const m = stamp.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/);
+        if (!m) return 0;
+        return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+    }
+
+    function fmtSnapshotTime(stamp: string): string {
+        void now;
+        const t = parseSnapshotStamp(stamp);
+        if (!t) return stamp;
+        const diff = Math.max(0, Date.now() - t);
+        if (diff < 60_000) return "just now";
+        if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+        if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+        return new Date(t).toLocaleDateString();
+    }
+
+    function fmtSnapshotSize(bytes: number): string {
+        return `${(bytes / 1024).toFixed(1)} KB`;
+    }
+
+    async function restoreSnapshot() {
+        const s = snapshotToRestore;
+        snapshotToRestore = null;
+        if (!s || restoringSnapshot) return;
+        restoringSnapshot = s.fileName;
+        try {
+            await cloudRestoreSnapshot(s.fileName);
+            await reloadSyncedStores();
+            showToast("Snapshot restored", "success");
+        } catch (e) {
+            showToast(friendlyError(e), "error");
+        } finally {
+            restoringSnapshot = null;
+            loadSnapshots();
+        }
+    }
+
+    // replacedAt is D1 CURRENT_TIMESTAMP ("YYYY-MM-DD HH:MM:SS", UTC) —
+    // parseServerTime appends the missing Z before diffing.
+    function fmtHistoryTime(s: string): string {
+        void now;
+        const t = parseServerTime(s);
+        return t ? fmtAgo(t) : s;
+    }
+
+    async function selectHistoryKind(kind: string) {
+        const req = ++historyReq;
+        historyKind = kind;
+        historyEntries = [];
+        loadingHistory = true;
+        try {
+            const entries = await cloudHistoryList(kind);
+            if (req !== historyReq) return; // a newer pill won the race
+            historyEntries = entries;
+        } catch (e) {
+            if (req !== historyReq) return;
+            showToast(friendlyError(e), "error");
+        } finally {
+            // Only the latest request may flip the spinner off — otherwise a
+            // stale response would enable the restore buttons early.
+            if (req === historyReq) loadingHistory = false;
+        }
+    }
+
+    async function restoreHistoryVersion() {
+        const entry = historyToRestore;
+        const kind = historyKind;
+        historyToRestore = null;
+        if (!entry || !kind || restoringHistory) return;
+        restoringHistory = entry.contentHash;
+        try {
+            await cloudHistoryRestore(kind, entry.contentHash);
+            showToast("Version restored", "success");
+            await reloadSyncedStores();
+        } catch (e) {
+            showToast(friendlyError(e), "error");
+        } finally {
+            restoringHistory = null;
+            // The restore force-pushed a new cloud blob (archiving the old
+            // one) AND wrote a pre-history-restore local snapshot — refresh
+            // both lists so the UI reflects that.
+            if (historyKind === kind) selectHistoryKind(kind);
+            loadSnapshots();
         }
     }
 
@@ -421,6 +508,14 @@
         return new Date(hasTz ? s : s.replace(" ", "T") + "Z").getTime();
     }
 
+    function fmtAgo(t: number): string {
+        const diff = Math.max(0, Date.now() - t);
+        if (diff < 60_000) return "just now";
+        if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+        if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+        return new Date(t).toLocaleDateString();
+    }
+
     let lastSyncOverall = $derived.by(() => {
         void now;
         let max = 0;
@@ -429,12 +524,110 @@
             if (t > max) max = t;
         }
         if (!max) return null;
-        const diff = Math.max(0, Date.now() - max);
-        if (diff < 60_000) return "just now";
-        if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-        if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-        return new Date(max).toLocaleDateString();
+        return fmtAgo(max);
     });
+
+    // Remote per-kind state (last writing device) — lazy-loaded, decorative.
+    let remoteState = $state<SyncStateRow[]>([]);
+    async function loadRemoteState() {
+        try {
+            remoteState = await cloudRemoteState();
+        } catch {
+            /* silent — device labels are optional decoration */
+        }
+        // The push path writes `cloud:too_large:<kind>` flags from Rust,
+        // bypassing the settings store — re-pull so the chips are fresh.
+        loadSettings().catch(() => {});
+    }
+
+    // Kinds the server currently holds — drives the history kind selector.
+    let historyKinds = $derived(remoteState.map((r) => r.kind));
+
+    // Kinds whose last export exceeded the worker's payload limit — the
+    // push path parks a `cloud:too_large:<kind>` setting (value = gzipped
+    // byte estimate) instead of pushing. Map kind → KB for the chips.
+    let tooLargeKinds = $derived.by(() => {
+        const out: Record<string, number> = {};
+        const prefix = "cloud:too_large:";
+        for (const [k, v] of Object.entries($settings)) {
+            if (k.startsWith(prefix)) {
+                out[k.slice(prefix.length)] = Math.round(
+                    (parseInt(v, 10) || 0) / 1024,
+                );
+            }
+        }
+        return out;
+    });
+
+    let lastSyncDevice = $derived.by(() => {
+        let best: SyncStateRow | null = null;
+        let bestT = 0;
+        for (const r of remoteState) {
+            const t = parseServerTime(r.updatedAt);
+            if (t > bestT) {
+                bestT = t;
+                best = r;
+            }
+        }
+        return best?.deviceName ?? null;
+    });
+
+    let syncBreakdownTitle = $derived.by(() => {
+        void now;
+        const lines = remoteState.map((r) => {
+            const t = parseServerTime(r.updatedAt);
+            const from = r.deviceName ? ` from ${r.deviceName}` : "";
+            const big =
+                tooLargeKinds[r.kind] !== undefined
+                    ? ` — too large to sync (~${tooLargeKinds[r.kind]} KB)`
+                    : "";
+            return `${kindLabel(r.kind)} — ${t ? fmtAgo(t) : r.updatedAt}${from}${big}`;
+        });
+        // Oversize kinds the server has never seen still deserve a line.
+        for (const [k, kb] of Object.entries(tooLargeKinds)) {
+            if (!remoteState.some((r) => r.kind === k)) {
+                lines.push(`${kindLabel(k)} — too large to sync (~${kb} KB)`);
+            }
+        }
+        return lines.join("\n");
+    });
+
+    // Device name shown on other devices next to data this one pushed.
+    let deviceNameInput = $state("");
+    async function initDeviceName() {
+        const cur = (get(settings)["cloud:device_name"] ?? "").trim();
+        if (cur) {
+            deviceNameInput = cur;
+            return;
+        }
+        let name = "This device";
+        try {
+            const { hostname } = await import("@tauri-apps/plugin-os");
+            name = ((await hostname()) ?? "").trim() || name;
+        } catch {
+            /* fall back to generic label */
+        }
+        deviceNameInput = name;
+        try {
+            await setSetting("cloud:device_name", name);
+        } catch {
+            /* non-fatal — retried on next edit */
+        }
+    }
+    async function saveDeviceName() {
+        const v = deviceNameInput.trim().slice(0, 64);
+        if (!v) {
+            deviceNameInput = (get(settings)["cloud:device_name"] ?? "").trim();
+            return;
+        }
+        deviceNameInput = v;
+        if (v === get(settings)["cloud:device_name"]) return;
+        try {
+            await setSetting("cloud:device_name", v);
+        } catch (e) {
+            showToast(friendlyError(e), "error");
+        }
+    }
 
     function copyHandle() {
         const slug = $cloudUser?.slug ?? "";
@@ -696,11 +889,19 @@
                 <div class="acc-card-head">
                     <h3 class="acc-card-title">Profile</h3>
                     <div class="acc-sync-controls">
-                        <div class="acc-sync-status">
+                        <div
+                            class="acc-sync-status"
+                            title={syncBreakdownTitle || undefined}
+                        >
                             <span class="acc-sync-label">Last sync</span>
                             <span class="acc-sync-value"
                                 >{lastSyncOverall ?? "Never"}</span
                             >
+                            {#if lastSyncOverall && lastSyncDevice}
+                                <span class="acc-sync-device"
+                                    >from {lastSyncDevice}</span
+                                >
+                            {/if}
                         </div>
                         {#if $cloudConflicts.length > 0}
                             <!-- Conflict-mode replacement for the Sync
@@ -840,6 +1041,16 @@
                             />
                         </label>
                     </div>
+                    <label class="acc-field">
+                        <span class="acc-field-label">Device name</span>
+                        <input
+                            type="text"
+                            bind:value={deviceNameInput}
+                            maxlength="64"
+                            onblur={saveDeviceName}
+                            onchange={saveDeviceName}
+                        />
+                    </label>
                     <div class="acc-fields-footer">
                         <p class="acc-fine"></p>
                         <button
@@ -1194,6 +1405,132 @@
                 {/each}
             </section>
 
+            <!-- Local snapshots -->
+            <section class="acc-card">
+                <h3 class="acc-card-title acc-card-title-solo">
+                    Local snapshots
+                </h3>
+                {#if snapshots.length === 0}
+                    <p class="acc-snap-empty">
+                        No snapshots yet — they're created automatically
+                        before any sync restore.
+                    </p>
+                {:else}
+                    {#each snapshots as s (s.fileName)}
+                        <div class="acc-snap-row">
+                            <div class="acc-snap-text">
+                                <span class="acc-snap-name"
+                                    >{kindLabel(s.kind)}</span
+                                >
+                                <span class="acc-snap-sub"
+                                    >{s.reason}
+                                    <span class="acc-sub-dot">·</span>
+                                    {fmtSnapshotTime(s.createdAt)}
+                                    <span class="acc-sub-dot">·</span>
+                                    {fmtSnapshotSize(s.sizeBytes)}</span
+                                >
+                            </div>
+                            <button
+                                class="acc-mini-btn"
+                                disabled={restoringSnapshot !== null}
+                                onclick={() => {
+                                    snapshotToRestore = s;
+                                    confirmRestoreSnapshot = true;
+                                }}
+                            >
+                                {#if restoringSnapshot === s.fileName}<span
+                                        class="acc-spinner acc-spinner-light acc-spinner-tiny"
+                                    ></span>{/if}
+                                <span
+                                    >{restoringSnapshot === s.fileName
+                                        ? "Restoring…"
+                                        : "Restore"}</span
+                                >
+                            </button>
+                        </div>
+                    {/each}
+                {/if}
+            </section>
+
+            <!-- Cloud version history -->
+            <section class="acc-card">
+                <h3 class="acc-card-title acc-card-title-solo">
+                    Cloud version history
+                </h3>
+                {#if historyKinds.length === 0}
+                    <p class="acc-snap-empty">
+                        Nothing synced to the cloud yet.
+                    </p>
+                {:else}
+                    <div class="acc-hist-kinds">
+                        {#each historyKinds as k (k)}
+                            <button
+                                class="acc-hist-kind-btn"
+                                class:acc-hist-kind-active={historyKind === k}
+                                onclick={() => selectHistoryKind(k)}
+                            >
+                                {kindLabel(k)}
+                                {#if tooLargeKinds[k] !== undefined}
+                                    <span
+                                        class="acc-too-large"
+                                        title={`Last export was ~${tooLargeKinds[k]} KB gzipped — over the sync limit. New changes for this kind stay local.`}
+                                        >Too large to sync</span
+                                    >
+                                {/if}
+                            </button>
+                        {/each}
+                    </div>
+                    {#if historyKind !== null}
+                        {#if loadingHistory}
+                            <p class="acc-snap-empty">Loading…</p>
+                        {:else if historyEntries.length === 0}
+                            <p class="acc-snap-empty">
+                                No older versions yet — history is written
+                                when a device overwrites a synced kind.
+                            </p>
+                        {:else}
+                            {#each historyEntries as h (h.contentHash)}
+                                <div class="acc-snap-row">
+                                    <div class="acc-snap-text">
+                                        <span class="acc-snap-name"
+                                            >{h.deviceName ??
+                                                "unknown device"}</span
+                                        >
+                                        <span class="acc-snap-sub"
+                                            >{fmtHistoryTime(h.replacedAt)}
+                                            <span class="acc-sub-dot">·</span>
+                                            {h.contentHash.slice(0, 8)}</span
+                                        >
+                                    </div>
+                                    <button
+                                        class="acc-mini-btn"
+                                        disabled={restoringHistory !== null}
+                                        onclick={() => {
+                                            historyToRestore = h;
+                                            confirmRestoreHistory = true;
+                                        }}
+                                    >
+                                        {#if restoringHistory === h.contentHash}<span
+                                                class="acc-spinner acc-spinner-light acc-spinner-tiny"
+                                            ></span>{/if}
+                                        <span
+                                            >{restoringHistory ===
+                                            h.contentHash
+                                                ? "Restoring…"
+                                                : "Restore"}</span
+                                        >
+                                    </button>
+                                </div>
+                            {/each}
+                        {/if}
+                    {:else}
+                        <p class="acc-snap-empty">
+                            Pick a kind to see its archived cloud versions.
+                        </p>
+                    {/if}
+                {/if}
+            </section>
+
             <!-- Danger zone -->
             <section class="acc-card acc-card-danger">
                 <h3 class="acc-card-title acc-card-title-solo acc-danger-title">
@@ -1411,6 +1748,38 @@
     }}
     oncancel={() => {
         confirmPull = false;
+    }}
+/>
+
+<ConfirmDialog
+    bind:show={confirmRestoreSnapshot}
+    title="Restore snapshot?"
+    message={`Restore this snapshot? Current data for ${snapshotToRestore ? kindLabel(snapshotToRestore.kind) : "this kind"} is snapshotted first.`}
+    confirmText="Restore"
+    confirmColor="var(--acc)"
+    onconfirm={() => {
+        confirmRestoreSnapshot = false;
+        restoreSnapshot();
+    }}
+    oncancel={() => {
+        confirmRestoreSnapshot = false;
+        snapshotToRestore = null;
+    }}
+/>
+
+<ConfirmDialog
+    bind:show={confirmRestoreHistory}
+    title="Restore version?"
+    message={`Restore this version of ${historyKind ? kindLabel(historyKind) : "this kind"}? Current data is snapshotted locally and the current cloud copy is archived to history first.`}
+    confirmText="Restore"
+    confirmColor="var(--acc)"
+    onconfirm={() => {
+        confirmRestoreHistory = false;
+        restoreHistoryVersion();
+    }}
+    oncancel={() => {
+        confirmRestoreHistory = false;
+        historyToRestore = null;
     }}
 />
 
@@ -1648,6 +2017,14 @@
         font-size: 11.5px;
         color: var(--t2);
         font-variant-numeric: tabular-nums;
+    }
+    .acc-sync-device {
+        font-size: 10px;
+        color: var(--t3);
+        max-width: 140px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
     .acc-sync-btn {
         display: inline-flex;
@@ -2156,6 +2533,89 @@
         line-height: 1.4;
         overflow: hidden;
         text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    /* Local snapshots */
+    .acc-snap-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--b1);
+        margin-bottom: 8px;
+        font-size: 12.5px;
+        background: var(--surface-hover);
+    }
+    .acc-snap-row:last-child {
+        margin-bottom: 0;
+    }
+    .acc-snap-text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        flex: 1;
+        min-width: 0;
+    }
+    .acc-snap-name {
+        font-weight: 600;
+        color: var(--t1);
+        font-size: 13px;
+        line-height: 1.2;
+    }
+    .acc-snap-sub {
+        font-size: 11.5px;
+        color: var(--t3);
+        font-family: var(--mono, ui-monospace);
+        line-height: 1.3;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .acc-snap-empty {
+        font-size: 11.5px;
+        color: var(--t3);
+        line-height: 1.55;
+        margin: 0;
+    }
+
+    /* Cloud version history */
+    .acc-hist-kinds {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 10px;
+    }
+    .acc-hist-kind-btn {
+        padding: 5px 10px;
+        font-size: 11.5px;
+        border-radius: 6px;
+        border: 1px solid var(--b1);
+        background: transparent;
+        color: var(--t2);
+        cursor: default;
+        white-space: nowrap;
+        font-family: var(--ui);
+    }
+    .acc-hist-kind-btn:hover {
+        background: var(--surface-hover);
+        color: var(--t1);
+    }
+    .acc-hist-kind-active,
+    .acc-hist-kind-active:hover {
+        border-color: var(--acc);
+        color: var(--t1);
+        background: var(--surface-hover);
+    }
+    .acc-too-large {
+        margin-left: 5px;
+        padding: 1px 6px;
+        font-size: 10px;
+        border-radius: 5px;
+        border: 1px solid rgba(245, 158, 11, 0.35);
+        background: rgba(245, 158, 11, 0.12);
+        color: #d97706;
         white-space: nowrap;
     }
 

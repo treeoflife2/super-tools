@@ -3,6 +3,7 @@
   import { activeHistoryEntry } from '$lib/modes/rest/stores';
   import { tabs as sharedTabs, activeTabId } from '$lib/shared/stores/tabs';
   import AgentPanel from '$lib/modes/agent/components/AgentPanel.svelte';
+  import CanvasPanel from '$lib/modes/canvas/components/CanvasPanel.svelte';
   import RestPanel from '$lib/modes/rest/components/RestPanel.svelte';
   import SqlPanel from '$lib/modes/sql/components/SqlPanel.svelte';
   import NoSqlPanel from '$lib/modes/nosql/components/NoSqlPanel.svelte';
@@ -50,6 +51,10 @@
 <div class="workspace">
   <div class="panel" class:active={$mode === 'agent' && !settingsActive}>
     <AgentPanel />
+  </div>
+
+  <div class="panel" class:active={$mode === 'canvas' && !settingsActive}>
+    <CanvasPanel />
   </div>
 
   <div class="panel" class:active={$mode === 'history' && !settingsActive}>

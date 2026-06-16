@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
   import { get } from 'svelte/store';
   import { Terminal } from '@xterm/xterm';
   import { FitAddon } from '@xterm/addon-fit';
@@ -15,7 +15,6 @@
     agentShellIds,
     agentShellOpen,
     agentSessionActivity,
-    agentSessionExited,
     agentSessions,
     agentSoundEnabled,
     agentDockBounceEnabled,
@@ -43,15 +42,13 @@
     agentCheckClaudeInstalled,
     agentCheckCliInstalled,
   } from '../commands';
-  import ClaudeNotInstalledModal from './ClaudeNotInstalledModal.svelte';
-  import CodexNotInstalledModal from './CodexNotInstalledModal.svelte';
-  import GeminiNotInstalledModal from './GeminiNotInstalledModal.svelte';
-  import OpenCodeNotInstalledModal from './OpenCodeNotInstalledModal.svelte';
+  import ProviderNotInstalledModal from '$lib/shared/agent/ProviderNotInstalledModal.svelte';
   import { showToast } from '$lib/shared/primitives/toast';
   import { errorToast, friendlyError } from '$lib/utils/errors';
   import { refreshAgentGitStatus, refreshAgentContextUsage, loadAgentSessions, agentGitBranchName, agentGitFiles, agentGitAhead, agentGitBehind } from '../stores';
   import { getTerminalTheme } from '$lib/utils/theme';
   import { appearance } from '$lib/stores/settings';
+  import { mode } from '$lib/stores/app';
   import { base64ToBytes, deferUntilFrame, loadWebGLAddon } from '$lib/shared/primitives/terminal-utils';
   import { getPurposePrompt } from '../ai/prompt';
   import { AGENT_EVENT } from '$lib/shared/constants/events';
@@ -71,9 +68,50 @@
   let shellEl: HTMLDivElement;
   let wrapperEl: HTMLDivElement;
 
+  $effect(() => {
+    if ($mode !== 'agent') return;
+    // Read activeAgentSession non-reactively — this $effect should only
+    // re-run when $mode changes (e.g., Canvas → Agent return), NOT when
+    // the active session changes via tab click. Tab click activations go
+    // through the unsubSession subscriber → selectSession → showTermEntry,
+    // which has sole authority over visibility. Adding a parallel call
+    // from this $effect races and corrupts the activeTermEntry pointer.
+    const session = untrack(() => $activeAgentSession);
+    if (!session?.id) return;
+
+    // Active session's container may be orphaned after a Canvas round-trip
+    // (CanvasTile.detachAgentTerminal moved it into a canvas tile slot,
+    // then the tile unmounted). Re-home it to terminalEl/shellEl, then let
+    // showTermEntry / showShellEntry apply the correct visibility class.
+    const entry = untrack(() => $agentTerminalMap).get(session.id);
+    if (entry && terminalEl) {
+      if (entry.container.parentElement !== terminalEl) {
+        terminalEl.appendChild(entry.container);
+      }
+      showTermEntry(entry);
+    }
+
+    const shellEntry = untrack(() => $agentShellMap).get(session.id);
+    if (shellEntry && shellEl) {
+      if (shellEntry.container.parentElement !== shellEl) {
+        shellEl.appendChild(shellEntry.container);
+      }
+      showShellEntry(shellEntry);
+    }
+  });
+
+  // Re-fit when mode returns to agent (e.g. Canvas → Agent round-trip).
+  $effect(() => {
+    const m = $mode;
+    if (m === 'agent') scheduleFit();
+  });
+
   // Active terminal entry refs
   let activeTermEntry: { term: Terminal; fitAddon: FitAddon; searchAddon: SearchAddon; container: HTMLDivElement; terminalId: string | null; _exitBuffer?: string } | null = null;
   let activeShellEntry: { term: Terminal; fitAddon: FitAddon; searchAddon: SearchAddon; container: HTMLDivElement; terminalId: string | null } | null = null;
+
+  // Outer-container ResizeObserver (set up in onMount, torn down in onDestroy)
+  let _containerResizeObserver: ResizeObserver | null = null;
 
   // Divider drag state
   let dragging = $state(false);
@@ -256,13 +294,17 @@
   // Context usage polling interval
   let contextUsageInterval: ReturnType<typeof setInterval> | null = null;
 
-  // Suppress auto-switch on exit (set by reset/close actions)
-  let _suppressExit = false;
+  // Terminal IDs whose PTY exit was initiated by Clauge (reset / relaunch /
+  // close-tab / delete-session). The exit handler removes the id from this
+  // set when the exit event arrives and routes through the suppressed-path
+  // cleanup instead of the natural-exit path. Per-terminal scoping (vs a
+  // single boolean flag) eliminates the async-race window — each kill is
+  // paired 1:1 with its own exit. Termids are unique per spawn, so a stale
+  // entry (exit event that never arrives) has no collision risk.
+  const _suppressedTerminalIds = new Set<string>();
 
-  let showClaudeNotInstalled = $state(false);
-  let showCodexNotInstalled = $state(false);
-  let showGeminiNotInstalled = $state(false);
-  let showOpenCodeNotInstalled = $state(false);
+  let showNotInstalled = $state(false);
+  let notInstalledProvider = $state<'claude' | 'codex' | 'gemini' | 'opencode'>('claude');
 
   // --- Notification system for action-required prompts ---
   let notifyOutputBuffer = '';
@@ -357,20 +399,45 @@
     return getTerminalTheme(app.theme, app.accentColor);
   }
 
-  // LOCAL FORK: VSCode-style clipboard helpers for xterm. Right-click pastes
-  // from clipboard. Ctrl+C / Ctrl+V handling lives in each terminal's
-  // attachCustomKeyEventHandler (close to the existing find/escape logic).
-  function attachVscodeClipboard(t: Terminal, container: HTMLDivElement) {
-    container.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      // If there's an active selection, copy. Otherwise paste.
-      if (t.hasSelection()) {
-        navigator.clipboard.writeText(t.getSelection()).catch(() => {});
-        t.clearSelection();
-      } else {
-        navigator.clipboard.readText().then((text) => { if (text) t.paste(text); }).catch(() => {});
+  type ImeCoalesceState = { last: string; at: number };
+
+  const hasNonAscii = (data: string | null | undefined): boolean => !!data && /[^\x00-\x7F]/.test(data);
+
+  function coalesceGrowingImeCommit(data: string, state: ImeCoalesceState): string {
+    // Some Linux IME + WebKitGTK/xterm.js combinations can resend the
+    // whole committed composition buffer through xterm.onData(), e.g.
+    // "你" then "你好".  Do not intercept DOM composition/input events here:
+    // preventing xterm's hidden textarea events can stop IME commits entirely.
+    // Keep this workaround at the PTY bridge only and only trim the observed
+    // growing-buffer shape. Plain ASCII/control input is always passed through.
+    const now = Date.now();
+    if (!hasNonAscii(data)) {
+      if (/\x1b|[\x00-\x08\x0e-\x1f\x7f]/.test(data) || data.length !== 1) {
+        state.last = '';
+        state.at = 0;
       }
-    });
+      return data;
+    }
+
+    if (state.last && now - state.at < 500 && data.length > state.last.length && data.startsWith(state.last)) {
+      const suffix = data.slice(state.last.length);
+      state.last = data;
+      state.at = now;
+      return suffix;
+    }
+
+    state.last = data;
+    state.at = now;
+    return data;
+  }
+
+  function clearXtermTextarea(term: Terminal): void {
+    // WebKitGTK can leave committed IME text in xterm's hidden textarea; the
+    // next commit is then emitted as previous+new ("你好" then
+    // "你好今天星期几").  Clear after xterm has already produced onData so the
+    // current commit is preserved while the next diff starts from empty.
+    const textarea = term.textarea;
+    if (textarea && textarea.value) textarea.value = '';
   }
 
   function createTermEntry(sessionId: string): { term: Terminal; fitAddon: FitAddon; searchAddon: SearchAddon; container: HTMLDivElement; terminalId: string | null; _exitBuffer?: string } {
@@ -394,7 +461,7 @@
     t.loadAddon(sa);
 
     const container = document.createElement('div');
-    container.style.cssText = 'width:100%;height:100%;display:none;';
+    container.style.cssText = 'width:100%;height:100%;';
     terminalEl.appendChild(container);
     t.open(container);
     loadWebGLAddon(t);
@@ -433,26 +500,39 @@
       return true;
     });
 
-    t.onData((data) => {
+    const writeAgentTerminalData = (data: string) => {
+      if (!data) return;
       const tIds = get(agentTerminalIds);
       const termId = tIds.get(sessionId);
       if (termId) {
         agentWriteToTerminal(termId, data).catch(() => {
-          // PTY dead (I/O error) — treat as session exit. Preserve the xterm
-          // entry (scrollback) so reopen shows prior output instead of respawn.
+          // PTY dead (I/O error) — treat as session exit. Mirror the
+          // natural-exit path: clear the live termId, mark activity done,
+          // and close the tab so the user isn't stuck typing into a
+          // frozen terminal. Re-opening from the sidebar will auto-spawn
+          // a fresh CLI (with --resume).
           agentTerminalIds.update(m => { m.delete(sessionId); return new Map(m); });
           agentSessionActivity.update(m => { m.set(sessionId, 'done'); return new Map(m); });
-          agentSessionExited.update(m => { m.set(sessionId, true); return new Map(m); });
-          const currentActive = get(activeAgentSession);
-          if (currentActive?.id === sessionId) {
-            const activity = get(agentSessionActivity);
-            const sessions = get(agentSessions);
-            const nextRunning = sessions.find(s => s.id !== sessionId && activity.get(s.id) === 'running');
-            if (nextRunning) { activeAgentSession.set(nextRunning); }
-            else { currentSessionId = null; activeAgentSession.set(null); }
+          const tMapErr = get(agentTerminalMap);
+          const errEntry = tMapErr.get(sessionId);
+          if (errEntry) {
+            try { errEntry.container.remove(); } catch (_) {}
+            try { errEntry.term.dispose(); } catch (_) {}
+            agentTerminalMap.update(m => { m.delete(sessionId); return new Map(m); });
           }
+          if (activeTermEntry === errEntry) activeTermEntry = null;
+          if (currentSessionId === sessionId) currentSessionId = null;
+          const allTabsErr = get(tabsStore);
+          const errTab = allTabsErr.find(t => t.mode === 'agent' && t.key === sessionId);
+          if (errTab) closeTab(errTab.id);
         });
       }
+    };
+    const termImeState: ImeCoalesceState = { last: '', at: 0 };
+    t.onData((rawData: string) => {
+      const data = coalesceGrowingImeCommit(rawData, termImeState);
+      clearXtermTextarea(t);
+      writeAgentTerminalData(data);
     });
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -483,11 +563,11 @@
 
   function showTermEntry(entry: { term: Terminal; fitAddon: FitAddon; searchAddon: SearchAddon; container: HTMLDivElement; terminalId: string | null }) {
     if (activeTermEntry && activeTermEntry !== entry) {
-      activeTermEntry.container.style.display = 'none';
+      activeTermEntry.container.classList.add('agent-term-hidden');
       try { activeTermEntry.term.options.scrollback = 1000; } catch (_) {}
       if (termFindOpen) try { activeTermEntry.searchAddon.clearDecorations(); } catch { /* ignore */ }
     }
-    entry.container.style.display = 'block';
+    entry.container.classList.remove('agent-term-hidden');
     try { entry.term.options.scrollback = 10000; } catch (_) {}
     activeTermEntry = entry;
     // LOCAL FORK: double rAF — single rAF runs before the display:block
@@ -512,7 +592,8 @@
       } else {
         try { entry.term.focus(); } catch (_) {}
       }
-    }));
+    });
+    scheduleFitRetries();
   }
 
   function createShellEntry(sessionId: string): { term: Terminal; fitAddon: FitAddon; searchAddon: SearchAddon; container: HTMLDivElement; terminalId: string | null } {
@@ -535,7 +616,7 @@
     t.loadAddon(sa);
 
     const container = document.createElement('div');
-    container.style.cssText = 'width:100%;height:100%;display:none;';
+    container.style.cssText = 'width:100%;height:100%;';
     shellEl.appendChild(container);
     t.open(container);
     loadWebGLAddon(t);
@@ -576,7 +657,8 @@
       shellLoadingSessions = shellLoadingSessions.filter(id => id !== sessionId);
     }, AGENT_SHELL_LOADER_MS);
 
-    t.onData((data) => {
+    const writeShellData = (data: string) => {
+      if (!data) return;
       const sIds = get(agentShellIds);
       const shellId = sIds.get(sessionId);
       if (shellId) {
@@ -587,6 +669,12 @@
           refitAll();
         });
       }
+    };
+    const shellImeState: ImeCoalesceState = { last: '', at: 0 };
+    t.onData((rawData: string) => {
+      const data = coalesceGrowingImeCommit(rawData, shellImeState);
+      clearXtermTextarea(t);
+      writeShellData(data);
     });
 
     let shellResizeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -614,11 +702,11 @@
 
   function showShellEntry(sEntry: { term: Terminal; fitAddon: FitAddon; searchAddon: SearchAddon; container: HTMLDivElement; terminalId: string | null }) {
     if (activeShellEntry && activeShellEntry !== sEntry) {
-      activeShellEntry.container.style.display = 'none';
+      activeShellEntry.container.classList.add('agent-term-hidden');
       try { activeShellEntry.term.options.scrollback = 500; } catch (_) {}
       if (shellFindOpen) try { activeShellEntry.searchAddon.clearDecorations(); } catch { /* ignore */ }
     }
-    sEntry.container.style.display = 'block';
+    sEntry.container.classList.remove('agent-term-hidden');
     try { sEntry.term.options.scrollback = 5000; } catch (_) {}
     activeShellEntry = sEntry;
     // LOCAL FORK: double rAF + sync PTY resize so the shell doesn't render
@@ -640,7 +728,36 @@
           } catch { shellFindNoMatch = true; }
         }
       }
-    }));
+    });
+    scheduleFitRetries();
+  }
+
+  // Debounced fit triggered by container resize or store changes.
+  // Belt-and-suspenders on top of the per-entry ResizeObservers — those
+  // observe the inner xterm container; this one fires when the outer wrapper
+  // (terminalEl / shellEl) changes size, e.g. when agentShellOpen closes.
+  let _fitTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleFit() {
+    if (_fitTimer !== null) clearTimeout(_fitTimer);
+    _fitTimer = setTimeout(() => {
+      _fitTimer = null;
+      try { activeTermEntry?.fitAddon?.fit(); } catch (_) {}
+      try { activeShellEntry?.fitAddon?.fit(); } catch (_) {}
+    }, 60);
+  }
+
+  function scheduleFitRetries() {
+    // Multiple delayed fits to catch slow-settling layouts (fresh launch,
+    // mode-switch with animations, etc.).
+    scheduleFit(); // 60ms default
+    setTimeout(() => {
+      try { activeTermEntry?.fitAddon.fit(); } catch {}
+      try { activeShellEntry?.fitAddon.fit(); } catch {}
+    }, 200);
+    setTimeout(() => {
+      try { activeTermEntry?.fitAddon.fit(); } catch {}
+      try { activeShellEntry?.fitAddon.fit(); } catch {}
+    }, 500);
   }
 
   function refitAll(sendPtyResize = false) {
@@ -759,24 +876,6 @@
   // worktrees give unique spawnPaths so this is a no-op for them.
   const _pendingCaptureByPath = new Map<string, Promise<void>>();
 
-  // User-initiated re-spawn for an exited session. Disposes the preserved
-  // scrollback xterm and starts a fresh claude PTY via the normal spawn path.
-  async function startNewForActiveSession() {
-    const session = get(activeAgentSession);
-    if (!session) return;
-    const tMap = get(agentTerminalMap);
-    const exitedEntry = tMap.get(session.id);
-    if (exitedEntry) {
-      try { exitedEntry.container.remove(); } catch (_) {}
-      try { exitedEntry.term.dispose(); } catch (_) {}
-      agentTerminalMap.update(m => { m.delete(session.id); return new Map(m); });
-    }
-    if (activeTermEntry === exitedEntry) activeTermEntry = null;
-    agentSessionExited.update(m => { m.delete(session.id); return new Map(m); });
-    currentSessionId = null;
-    selectSession(session);
-  }
-
   async function selectSession(session: any) {
     console.log(`[TERM] selectSession called: id=${session?.id}, title=${session?.title}`);
     if (!session || !terminalEl) { console.log('[TERM] SKIP: no session or terminalEl'); return; }
@@ -810,20 +909,6 @@
       return;
     }
 
-    // Reopened an exited session — show preserved scrollback, do NOT auto-spawn.
-    // User must explicitly click "Start new" to spawn a fresh claude.
-    if (entry && get(agentSessionExited).get(session.id)) {
-      if (entry.container.parentElement !== terminalEl) {
-        terminalEl.appendChild(entry.container);
-      }
-      console.log('[TERM] EARLY RETURN: showing exited session scrollback (no respawn)');
-      termReady = true;
-      spawning = false;
-      showTermEntry(entry);
-      refreshAgentGitStatus();
-      return;
-    }
-
     // Gate on the session's CLI being installed before creating any
     // terminal state. The provider lives on the session row; default
     // to 'claude' for legacy sessions written before the column existed.
@@ -836,10 +921,8 @@
         ? await agentCheckClaudeInstalled()
         : await agentCheckCliInstalled(provider);
       if (!installed) {
-        if (provider === 'claude') showClaudeNotInstalled = true;
-        else if (provider === 'codex') showCodexNotInstalled = true;
-        else if (provider === 'gemini') showGeminiNotInstalled = true;
-        else if (provider === 'opencode') showOpenCodeNotInstalled = true;
+        notInstalledProvider = provider;
+        showNotInstalled = true;
         spawning = false;
         return;
       }
@@ -1019,18 +1102,27 @@
         // child process dies. This is the authoritative exit signal — no text matching
         // needed. Triggered when user types "exit" + Enter and Claude Code exits.
         if (payload.exit === true) {
-          console.log(`[TERM] EXIT signaled by PTY close for session ${sessionId}, gen=${myGeneration}, suppress=${_suppressExit}`);
+          // Suppression is keyed per-terminal-id. If Clauge initiated this
+          // kill (reset/relaunch/close-tab/delete), the termId was added
+          // to the set before the kill. .delete returns true iff it was
+          // present — single-shot consume. No timer, no global flag, no
+          // interference with concurrent kills of other sessions.
+          const thisTermId = entry?.terminalId ?? null;
+          const wasSuppressed = thisTermId ? _suppressedTerminalIds.delete(thisTermId) : false;
+          console.log(`[TERM] EXIT signaled by PTY close for session ${sessionId}, gen=${myGeneration}, suppressed=${wasSuppressed}`);
           agentTerminalIds.update(m => { m.delete(sessionId); return new Map(m); });
           const tMapNow = get(agentTerminalMap);
           const exitedEntry = tMapNow.get(sessionId);
-          // Preserve the xterm entry so reopening the session shows the prior
-          // scrollback instead of auto-spawning a fresh claude. The PTY id has
-          // already been cleared above; reset on user-initiated "Start new".
-          // _suppressExit is set by reset/relaunch/close-tab handlers which
-          // dispose the entry themselves — don't duplicate that here.
-          // Capture session ID from buffered "claude --resume <id>" if available
+          // Capture the resume id printed in the exit banner so the
+          // next spawn can target this exact session.
+          //   Claude:      `claude --resume <uuid>`
+          //   Antigravity: `agy --conversation=<uuid>` or `agy --conversation <uuid>`
+          // Both flow into `claudeSessionId` (column-name legacy — it
+          // holds whatever resume id the provider needs).
           if (entry && entry._exitBuffer && !session.claudeSessionId) {
-            const resumeMatch = entry._exitBuffer.match(/claude --resume ([a-f0-9-]+)/);
+            const resumeMatch =
+              entry._exitBuffer.match(/claude --resume ([a-f0-9-]{36})/) ||
+              entry._exitBuffer.match(/agy --conversation[ =]([a-f0-9-]{36})/);
             if (resumeMatch) {
               session.claudeSessionId = resumeMatch[1];
               agentUpdateSessionId(session.id, resumeMatch[1]).catch(() => {});
@@ -1038,10 +1130,11 @@
           }
           if (entry) entry._exitBuffer = '';
           agentSessionActivity.update(m => { m.set(sessionId, 'done'); return new Map(m); });
-          if (!_suppressExit) {
-            agentSessionExited.update(m => { m.set(sessionId, true); return new Map(m); });
-          } else if (exitedEntry) {
-            // Reset/relaunch/close-tab path — caller disposes; mirror legacy cleanup.
+          // Always dispose the xterm entry on exit. Re-opening the session
+          // from the sidebar will auto-spawn a fresh CLI (with --resume if
+          // claudeSessionId is set), so preserving scrollback in a dead
+          // xterm just to overlay a "Session ended" banner is dead weight.
+          if (exitedEntry) {
             try { exitedEntry.container.remove(); } catch (_) {}
             try { exitedEntry.term.dispose(); } catch (_) {}
             agentTerminalMap.update(m => { m.delete(sessionId); return new Map(m); });
@@ -1052,29 +1145,11 @@
           // two terminals visible (cross-session leak).
           if (activeTermEntry === exitedEntry) activeTermEntry = null;
           if (currentSessionId === sessionId) currentSessionId = null;
-          if (!_suppressExit) {
-            const allTabs = get(tabsStore);
-            const exitedTab = allTabs.find(t => t.mode === 'agent' && t.key === sessionId);
-            if (exitedTab) {
-              const remainingAgentTabs = allTabs.filter(t => t.mode === 'agent' && t.id !== exitedTab.id);
-              closeTab(exitedTab.id);
-              if (remainingAgentTabs.length > 0) {
-                const nextTab = remainingAgentTabs[remainingAgentTabs.length - 1];
-                activateTab(nextTab.id);
-                if (nextTab.key) {
-                  const sessions = get(agentSessions);
-                  const nextSession = sessions.find(s => s.id === nextTab.key);
-                  if (nextSession) activeAgentSession.set(nextSession);
-                }
-              } else {
-                activeAgentSession.set(null);
-              }
-            } else {
-              const currentActive = get(activeAgentSession);
-              if (currentActive?.id === sessionId) activeAgentSession.set(null);
-            }
-          }
-          _suppressExit = false;
+          const allTabs = get(tabsStore);
+          const exitedTab = allTabs.find(t => t.mode === 'agent' && t.key === sessionId);
+          const currentActive = get(activeAgentSession);
+          if (exitedTab) closeTab(exitedTab.id);
+          if (currentActive?.id === sessionId) activeAgentSession.set(null);
           return;
         }
 
@@ -1106,7 +1181,7 @@
         // Track activity — only mark 'running' if sustained output (not just echo/redraw)
         // Count bytes in a rolling 500ms window. Claude Code generating output produces
         // hundreds of bytes/sec. Echo/redraws are < 50 bytes total.
-        if (!_suppressExit) {
+        {
           const payloadSize = payload.data?.length || 0;
           activityBytes += payloadSize;
 
@@ -1335,11 +1410,11 @@
     } else if (!session) {
       currentSessionId = null;
       if (activeTermEntry) {
-        activeTermEntry.container.style.display = 'none';
+        activeTermEntry.container.classList.add('agent-term-hidden');
         activeTermEntry = null;
       }
       if (activeShellEntry) {
-        activeShellEntry.container.style.display = 'none';
+        activeShellEntry.container.classList.add('agent-term-hidden');
         activeShellEntry = null;
       }
       // Clear git state and usage polling when no session
@@ -1366,10 +1441,13 @@
       });
     } else {
       if (activeShellEntry) {
-        activeShellEntry.container.style.display = 'none';
+        activeShellEntry.container.classList.add('agent-term-hidden');
         activeShellEntry = null;
       }
       refitAll();
+      // scheduleFit fires 60 ms after layout settles, catching any residual
+      // height change that refitAll's double-rAF may still miss.
+      scheduleFit();
     }
   });
 
@@ -1378,12 +1456,14 @@
     const detail = (e as CustomEvent).detail;
     if (!detail?.session) return;
     const session = detail.session;
-    _suppressExit = true;
 
     // Kill terminal
     const tIds = get(agentTerminalIds);
     const termId = tIds.get(session.id);
-    if (termId) agentKillTerminal(termId).catch(() => {});
+    if (termId) {
+      _suppressedTerminalIds.add(termId);
+      agentKillTerminal(termId).catch(() => {});
+    }
 
     // Kill shell
     const sIds = get(agentShellIds);
@@ -1399,7 +1479,6 @@
     // Remove from maps
     agentTerminalIds.update(m => { m.delete(session.id); return new Map(m); });
     agentShellIds.update(m => { m.delete(session.id); return new Map(m); });
-    agentSessionExited.update(m => { m.delete(session.id); return new Map(m); });
 
     // Remove terminal entry so selectSession creates fresh one
     const tMap = get(agentTerminalMap);
@@ -1423,16 +1502,6 @@
     currentSessionId = null;
     activeTermEntry = null;
     activeShellEntry = null;
-    // DO NOT clear _suppressExit synchronously — the PTY kill above
-    // is async, so the exit event arrives later. Clearing _suppressExit
-    // here would let the exit handler run with suppression off, set
-    // agentSessionExited[id]=true, close the tab, and surface the
-    // "Session ended" banner on re-open. The exit handler clears
-    // _suppressExit itself once it fires (lines 927 / 1022). Safety
-    // net: a setTimeout clears it after 2s in case the exit event
-    // never arrives (rare PTY edge case) so a future natural exit
-    // isn't incorrectly suppressed.
-    setTimeout(() => { _suppressExit = false; }, 2000);
 
     loadAgentSessions().then(() => {
       selectSession(session);
@@ -1444,12 +1513,14 @@
     const detail = (e as CustomEvent).detail;
     if (!detail?.session) return;
     const session = detail.session;
-    _suppressExit = true;
 
     // Kill terminal
     const tIds = get(agentTerminalIds);
     const termId = tIds.get(session.id);
-    if (termId) agentKillTerminal(termId).catch(() => {});
+    if (termId) {
+      _suppressedTerminalIds.add(termId);
+      agentKillTerminal(termId).catch(() => {});
+    }
 
     // Kill shell
     const sIds = get(agentShellIds);
@@ -1459,7 +1530,6 @@
     // Remove from maps (keep claudeSessionId for --resume)
     agentTerminalIds.update(m => { m.delete(session.id); return new Map(m); });
     agentShellIds.update(m => { m.delete(session.id); return new Map(m); });
-    agentSessionExited.update(m => { m.delete(session.id); return new Map(m); });
 
     const tMap = get(agentTerminalMap);
     const entry = tMap.get(session.id);
@@ -1480,19 +1550,24 @@
     currentSessionId = null;
     activeTermEntry = null;
     activeShellEntry = null;
-    _suppressExit = false; // Reset — killed PTY won't trigger exit detection to clear it
 
     // Relaunch with updated session data (prompt changes picked up from activeAgentSession)
     requestAnimationFrame(() => selectSession(session));
   }
 
-  // Event handler for tab close — kills terminal without deleting session from DB
+  // Event handler for tab close — disposes UI state but does NOT kill the PTY
+  // (the session stays alive in the background; user can reopen from sidebar).
   function handleCloseTabSession(e: Event) {
     const detail = (e as CustomEvent).detail;
     const sessionId = detail?.sessionId;
     if (!sessionId) return;
 
-    _suppressExit = true;
+    // Defensive: in case the PTY happens to exit while the tab is closed,
+    // add its termId so the exit handler routes through the suppressed path
+    // instead of trying to close a tab that no longer exists.
+    const tIdsClose = get(agentTerminalIds);
+    const closingTermId = tIdsClose.get(sessionId);
+    if (closingTermId) _suppressedTerminalIds.add(closingTermId);
 
     // Cleanup terminal entry
     const tMap = get(agentTerminalMap);
@@ -1514,7 +1589,6 @@
 
     agentTerminalIds.update(m => { m.delete(sessionId); return new Map(m); });
     agentShellIds.update(m => { m.delete(sessionId); return new Map(m); });
-    agentSessionExited.update(m => { m.delete(sessionId); return new Map(m); });
 
     if (activeTermEntry === entry) activeTermEntry = null;
     if (activeShellEntry === sEntry) activeShellEntry = null;
@@ -1527,12 +1601,13 @@
     if (!detail?.session) return;
     const session = detail.session;
 
-    _suppressExit = true;
-
     // Kill terminal
     const tIds = get(agentTerminalIds);
     const termId = tIds.get(session.id);
-    if (termId) await agentKillTerminal(termId).catch(() => {});
+    if (termId) {
+      _suppressedTerminalIds.add(termId);
+      await agentKillTerminal(termId).catch(() => {});
+    }
 
     // Kill shell
     const sIds = get(agentShellIds);
@@ -1559,7 +1634,6 @@
 
     agentTerminalIds.update(m => { m.delete(session.id); return new Map(m); });
     agentShellIds.update(m => { m.delete(session.id); return new Map(m); });
-    agentSessionExited.update(m => { m.delete(session.id); return new Map(m); });
 
     // Remove worktree if exists. Surface failures via toast — silently
     // swallowing leaves an orphan directory on disk after the DB row is
@@ -1646,9 +1720,22 @@
       currentSessionId = null; // Force selectSession to process
       requestAnimationFrame(() => selectSession(currentSession));
     }
+
+    // Watch outer wrapper containers for size changes — fires when agentShellOpen
+    // toggles (display:none removes the panel, terminalEl expands) and on any
+    // other host-driven resize not covered by the per-entry ResizeObservers.
+    _containerResizeObserver = new ResizeObserver(() => scheduleFit());
+    if (terminalEl) _containerResizeObserver.observe(terminalEl);
+    if (shellEl) _containerResizeObserver.observe(shellEl);
+
+    // Fresh launch gets retry chain too
+    scheduleFitRetries();
   });
 
   onDestroy(() => {
+    _containerResizeObserver?.disconnect();
+    _containerResizeObserver = null;
+    if (_fitTimer !== null) { clearTimeout(_fitTimer); _fitTimer = null; }
     unsubSession();
     unsubShell();
     unsubAppearance();
@@ -1663,14 +1750,9 @@
   });
 </script>
 
-<ClaudeNotInstalledModal bind:show={showClaudeNotInstalled} />
-<CodexNotInstalledModal bind:show={showCodexNotInstalled} />
-<GeminiNotInstalledModal bind:show={showGeminiNotInstalled} />
-<OpenCodeNotInstalledModal bind:show={showOpenCodeNotInstalled} />
+<ProviderNotInstalledModal bind:show={showNotInstalled} provider={notInstalledProvider} />
 
 {#if $activeAgentSession}
-  {@const _activeId = $activeAgentSession.id}
-  {@const _isExited = $agentSessionExited.get(_activeId) === true}
   <div class="agent-panel" bind:this={wrapperEl}>
     <div class="agent-terminal-main" style="width:{$agentShellOpen ? mainWidth + '%' : '100%'}">
       {#if spawning}
@@ -1680,7 +1762,7 @@
                      : _prov === 'opencode' ? '/opencode-dark.svg'
                      : '/code-in-action.svg'}
         {@const _name = _prov === 'codex' ? 'Codex'
-                      : _prov === 'gemini' ? 'Gemini'
+                      : _prov === 'gemini' ? 'Antigravity'
                       : _prov === 'opencode' ? 'OpenCode'
                       : 'Claude Code'}
         <div class="agent-loading">
@@ -1689,13 +1771,6 @@
             <span class="loading-title">Starting {_name}</span>
             <span class="loading-sub">Setting up terminal session<span class="loading-dots"></span></span>
           </div>
-        </div>
-      {/if}
-      {#if _isExited && !spawning}
-        <div class="agent-ended-banner">
-          <span class="ended-dot"></span>
-          <span class="ended-text">Session ended</span>
-          <button class="ended-btn" type="button" onclick={startNewForActiveSession}>Start new</button>
         </div>
       {/if}
       {#if termFindOpen}
@@ -1931,51 +2006,6 @@
     to { opacity: 1; transform: scale(1); }
   }
 
-  .agent-ended-banner {
-    position: absolute;
-    top: 8px;
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 6px 10px 6px 12px;
-    border-radius: 999px;
-    background: var(--b1);
-    border: 1px solid var(--b1);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
-    font-family: var(--ui);
-    font-size: 12px;
-    color: var(--t2);
-    z-index: 3;
-  }
-  .ended-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--t4);
-    flex-shrink: 0;
-  }
-  .ended-text {
-    color: var(--t3);
-  }
-  .ended-btn {
-    appearance: none;
-    border: none;
-    background: var(--acc);
-    color: #fff;
-    font-family: var(--ui);
-    font-size: 12px;
-    font-weight: 500;
-    padding: 4px 10px;
-    border-radius: 999px;
-    cursor: pointer;
-    transition: opacity 0.15s ease;
-  }
-  .ended-btn:hover {
-    opacity: 0.85;
-  }
-
   .agent-shell-panel {
     display: flex;
     flex-direction: row;
@@ -2017,6 +2047,11 @@
   .agent-shell-container.term-hidden {
     opacity: 0;
   }
+
+  :global(.agent-term-hidden) {
+    display: none !important;
+  }
+
   .shell-loading {
     /* same .agent-loading positioning, just scoped here */
   }
